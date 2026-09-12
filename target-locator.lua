@@ -1,4 +1,4 @@
--- Autokey v2.0: sidebar navigation, target locator, teleport, AUTO and flight
+-- Autokey v2.1: sidebar, flight, targets, and cancellable Duck Boss summon loop
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -42,6 +42,11 @@ local flySpeed = 70
 local flightConnections = {}
 local pressed = {}
 local setAuto
+local stopDuck
+local duck = {enabled = false, phase = "IDLE", prompt = nil, returnRoot = nil,
+    boss = nil, held = nil, deadline = 0, deathSeen = false, fought = 0}
+local duckConnections = {}
+local duckMarker = nil
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -121,10 +126,18 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 310), Size = UDim2.fromOffset(137, 65),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.0 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.1 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
+
+local duckTab = create("TextButton", {
+    Position = UDim2.fromOffset(10, 188), Size = UDim2.fromOffset(145, 38),
+    Text = "Duck Boss / เป็ด", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
+}, sidebar)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, duckTab)
 
 local function makePage()
     return create("Frame", {
@@ -135,6 +148,8 @@ end
 local targetPage = makePage()
 local flightPage = makePage()
 flightPage.Visible = false
+local duckPage = makePage()
+duckPage.Visible = false
 
 local pageTitle = create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1,
@@ -211,10 +226,64 @@ local flyStatus = create("TextLabel", {
     Text = "เปิดบินแล้ว AUTO วาร์ปจะหยุด\nกดปิดบินเพื่อกลับสู่การเดินตามปกติ",
 }, flightPage)
 
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1,
+    Text = "Duck Boss / เสกบอสเป็ด", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 21,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, duckPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 42), Size = UDim2.new(1, 0, 0, 49),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+    Text = "ครั้งแรก: ยืนข้างเป็ดเล็กที่กด E แล้วบันทึกจุด\nระบบเสกและวาร์ปให้ ส่วนการโจมตีคุณทำเอง",
+}, duckPage)
+local bindDuck = create("TextButton", {
+    Position = UDim2.fromOffset(0, 99), Size = UDim2.new(1, 0, 0, 37),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 15, Text = "บันทึกจุดเสกที่ยืนอยู่",
+}, duckPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 143), Size = UDim2.fromOffset(117, 34),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 14, Text = "ชื่อบอสจริง:",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, duckPage)
+local duckName = create("TextBox", {
+    Position = UDim2.fromOffset(118, 143), Size = UDim2.new(1, -118, 0, 34),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 16,
+    Text = "DuckMonster", ClearTextOnFocus = false,
+}, duckPage)
+local duckButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 190), Size = UDim2.new(1, 0, 0, 43),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 16, Text = "DUCK AUTO: OFF — กดเพื่อเริ่ม",
+}, duckPage)
+local duckInventory = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 241), Size = UDim2.new(1, 0, 0, 34),
+    BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(204, 218, 230),
+    Font = Enum.Font.Code, TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Text = "Duck 1–7: ? / ? / ? / ? / ? / ? / ?",
+}, duckPage)
+local duckStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 282), Size = UDim2.new(1, 0, 0, 89),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 14, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "ยังไม่ได้บันทึกจุดเสก\nชื่อ DuckMonster อ้างอิงจากภาพและปรับได้\nหากกดเสกแล้วไม่เกิดภายใน 30 วินาที ระบบจะหยุด",
+}, duckPage)
+
 local function showPage(page)
     currentPage = page
     targetPage.Visible = page == "target"
     flightPage.Visible = page == "flight"
+    duckPage.Visible = page == "duck"
+    duckTab.BackgroundColor3 = page == "duck" and colors.active or colors.sidebar
     flightTab.BackgroundColor3 = page == "flight" and colors.active or colors.sidebar
     for i, tab in ipairs(tabs) do
         tab.BackgroundColor3 = page == "target" and i == selected
@@ -262,6 +331,7 @@ local function startFlight()
         return
     end
     setAuto(false)
+    if stopDuck then stopDuck("หยุดเสกเป็ดเพื่อเปิดบิน") end
     status.Text = "หยุด AUTO เพื่อเปิดบิน"
     table.clear(pressed)
     flight = {
@@ -395,6 +465,7 @@ end
 
 setAuto = function(enabled)
     if enabled and flight then stopFlight("ปิดบินเพื่อเปิด AUTO") end
+    if enabled and stopDuck then stopDuck("หยุดเสกเป็ดเพื่อเปิด AUTO เป้าหมาย") end
     auto = enabled
     locked = nil
     visitedCharacter = nil
@@ -424,6 +495,7 @@ gui.Destroying:Connect(function()
     running = false
     for _, connection in ipairs(flightConnections) do connection:Disconnect() end
     stopFlight()
+    if stopDuck then stopDuck("ปิดระบบแล้ว") end
     auto = false
     locked = nil
     added:Disconnect()
@@ -541,6 +613,437 @@ local function warp(entry)
     return true, "วาร์ปแล้ว", character
 end
 
+
+-- Duck summon loop: bind the actual nearby ProximityPrompt; never call guessed remotes.
+local DUCK_SPAWN_TIMEOUT = 30
+local DUCK_RETURN_TIMEOUT = 15
+local function normalizeDuck(text)
+    return string.lower(tostring(text or "")):gsub("[%s%p]", "")
+end
+
+
+-- Read replicated inventory data only. Missing/unrecognized data stays unknown.
+local duckCounts = {}
+local duckZeroSince = {}
+local duckInventoryNext = 0
+local duckToolsConfirmed = false
+local function duckItemIndex(name)
+    local value = normalizeDuck(name):match("^duck([1-7])$")
+    return value and tonumber(value) or nil
+end
+local function inventoryNumber(value)
+    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge then
+        return nil
+    end
+    return math.floor(value)
+end
+local function stackAmount(object)
+    if object:IsA("IntValue") or object:IsA("NumberValue") then
+        return inventoryNumber(object.Value)
+    end
+    for _, key in ipairs({"Count", "Amount", "Quantity", "count", "amount", "quantity"}) do
+        local attribute = inventoryNumber(object:GetAttribute(key))
+        if attribute ~= nil then return attribute end
+        local child = object:FindFirstChild(key)
+        if child and (child:IsA("IntValue") or child:IsA("NumberValue")) then
+            local value = inventoryNumber(child.Value)
+            if value ~= nil then return value end
+        end
+    end
+    return nil
+end
+
+local function readDuckInventory(force)
+    local now = os.clock()
+    if not force and now < duckInventoryNext then return end
+    duckInventoryNext = now + 1
+    local numeric, toolsFound = {}, {}
+    for i = 1, 7 do numeric[i] = {} toolsFound[i] = 0 end
+
+    local function visit(object, toolsOnly)
+        if object:IsA("Tool") then
+            local i = duckItemIndex(object.Name)
+            if i then toolsFound[i] = toolsFound[i] + (stackAmount(object) or 1) end
+            return
+        end
+        if toolsOnly then return end
+        -- Tool stack fields are already included by their owning Tool.
+        if object:FindFirstAncestorOfClass("Tool") then return end
+        local i = duckItemIndex(object.Name)
+        if i then
+            local amount = stackAmount(object)
+            if amount ~= nil then numeric[i][amount] = true end
+        end
+        for key, value in pairs(object:GetAttributes()) do
+            local index = duckItemIndex(key)
+            local amount = inventoryNumber(value)
+            if index and amount ~= nil then numeric[index][amount] = true end
+        end
+    end
+
+    visit(player, false)
+    for _, container in ipairs(player:GetChildren()) do
+        if not container:IsA("PlayerGui") and not container:IsA("PlayerScripts") then
+            visit(container, false)
+            for _, object in ipairs(container:GetDescendants()) do visit(object, false) end
+        end
+    end
+    if player.Character then
+        for _, object in ipairs(player.Character:GetDescendants()) do visit(object, true) end
+    end
+
+    local allToolsPresent = true
+    for i = 1, 7 do
+        if toolsFound[i] <= 0 then allToolsPresent = false end
+    end
+    if allToolsPresent then duckToolsConfirmed = true end
+
+    local display = {}
+    for i = 1, 7 do
+        local value, distinct = nil, 0
+        for amount in pairs(numeric[i]) do value = amount distinct = distinct + 1 end
+        if distinct > 1 then
+            value = nil -- Conflicting replicas: do not guess.
+        elseif distinct == 0 then
+            if toolsFound[i] > 0 or duckToolsConfirmed then value = toolsFound[i] end
+        elseif toolsFound[i] > 0 and toolsFound[i] ~= value then
+            value = nil
+        end
+        duckCounts[i] = value
+        if value == 0 then
+            duckZeroSince[i] = duckZeroSince[i] or now
+        else
+            duckZeroSince[i] = nil
+        end
+        display[i] = value == nil and "?" or tostring(value)
+    end
+    duckInventory.Text = "Duck 1–7: " .. table.concat(display, " / ")
+end
+
+local function missingDuckItem()
+    for i = 1, 7 do
+        if duckCounts[i] == 0 and duckZeroSince[i]
+            and os.clock() - duckZeroSince[i] >= 1 then
+            return i
+        end
+    end
+    return nil
+end
+
+
+local function duckPromptPosition(prompt)
+    if not prompt or not prompt:IsDescendantOf(workspace) then return nil end
+    local parent = prompt.Parent
+    if parent:IsA("Attachment") then return parent.WorldPosition end
+    if parent:IsA("BasePart") then return parent.Position end
+    if parent:IsA("Model") then return parent:GetPivot().Position end
+    return nil
+end
+
+local function duckCharacter()
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root or not humanoid or humanoid.Health <= 0 or humanoid.SeatPart then
+        return nil
+    end
+    return character, root
+end
+
+local function endDuckHold()
+    local prompt = duck.held
+    duck.held = nil
+    if prompt then pcall(function() prompt:InputHoldEnd() end) end
+end
+
+local function clearDuckBoss()
+    for _, connection in ipairs(duckConnections) do connection:Disconnect() end
+    table.clear(duckConnections)
+    if duckMarker then duckMarker.gui:Destroy() duckMarker = nil end
+    duck.boss = nil
+    duck.deathSeen = false
+    duck.visitedCharacter = nil
+end
+
+stopDuck = function(message)
+    duck.enabled = false
+    endDuckHold()
+    clearDuckBoss()
+    duck.phase = "IDLE"
+    duckButton.Text = "DUCK AUTO: OFF — กดเพื่อเริ่ม"
+    duckButton.BackgroundColor3 = colors.blue
+    duckStatus.Text = message or "หยุดเสกเป็ดแล้ว"
+end
+
+local function bindDuckPrompt()
+    local _, root = duckCharacter()
+    if not root then return false, "รอตัวละครพร้อม และลงจากที่นั่งก่อนครับ" end
+    local closest, distance = nil, math.huge
+    for _, object in ipairs(workspace:GetDescendants()) do
+        if object:IsA("ProximityPrompt") then
+            local objectText = normalizeDuck(object.ObjectText)
+            local actionText = normalizeDuck(object.ActionText)
+            local parentText = normalizeDuck(object.Parent.Name)
+            local matches = objectText == "duckmonster"
+                or actionText == "needallduck"
+                or parentText == "duckmonster"
+            local position = matches and duckPromptPosition(object)
+            if position then
+                local d = (root.Position - position).Magnitude
+                if d <= object.MaxActivationDistance and d < distance then
+                    closest, distance = object, d
+                end
+            end
+        end
+    end
+    if not closest then
+        return false, "ไม่พบปุ่มเสกเป็ดในระยะ\nยืนให้เห็นปุ่ม E: DuckMonster / Need All Duck แล้วกดบันทึกอีกครั้ง"
+    end
+    duck.prompt = closest
+    duck.returnRoot = root.CFrame
+    return true, string.format(
+        "บันทึกจุดเสกแล้ว • ระยะ %.1f studs\nปุ่ม %s • ต้องกดค้าง %.1f วินาที\nกด DUCK AUTO เพื่อเริ่ม",
+        distance, closest.KeyboardKeyCode.Name, closest.HoldDuration
+    )
+end
+
+local function findDuckBoss()
+    local _, root = duckCharacter()
+    if not root then return nil end
+    local wanted = normalizeDuck(duckName.Text)
+    if wanted == "" then return nil end
+    local best, nearest = nil, math.huge
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model)
+            and not (duck.prompt and duck.prompt:IsDescendantOf(model))
+            and (normalizeDuck(model.Name) == wanted
+                or normalizeDuck(humanoid.DisplayName) == wanted) then
+            local part = getPart(model)
+            if part then
+                local d = (root.Position - part.Position).Magnitude
+                if d < nearest then
+                    nearest = d
+                    best = {model = model, humanoid = humanoid, part = part, distance = d}
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function attachDuckBoss(entry)
+    endDuckHold()
+    clearDuckBoss()
+    duck.boss = entry
+    duck.deathSeen = entry.humanoid.Health <= 0
+    local function markDead()
+        if duck.boss == entry then duck.deathSeen = true end
+    end
+    table.insert(duckConnections, entry.humanoid.Died:Connect(markDead))
+    table.insert(duckConnections, entry.humanoid.HealthChanged:Connect(function(health)
+        if health <= 0 then markDead() end
+    end))
+    duck.phase = "FIGHT"
+    duck.missingSince = nil
+    duck.warpDeadline = os.clock() + DUCK_RETURN_TIMEOUT
+    duckMarker = makeMarker(entry.part)
+end
+
+local function summonPromptReady(root)
+    local prompt = duck.prompt
+    local position = duckPromptPosition(prompt)
+    if not position then return false, "จุดเสกไม่อยู่ในข้อมูลที่โหลด กรุณาบันทึกจุดใหม่" end
+    if not prompt.Enabled then return false, "ปุ่มเสกยังไม่พร้อม" end
+    if (root.Position - position).Magnitude > prompt.MaxActivationDistance then
+        return false, "ยังไม่ถึงระยะกด E หรือถูกดึงกลับจากจุดเสก"
+    end
+    return true
+end
+
+local function beginDuckReturn()
+    duck.phase = "RETURN"
+    duck.deadline = os.clock() + DUCK_RETURN_TIMEOUT
+    duck.returnMoved = false
+end
+
+local function duckStep()
+    if not duck.enabled then return end
+    local now = os.clock()
+    local character, root = duckCharacter()
+    if not character then
+        if duck.phase == "HOLD" or duck.phase == "WAIT_SPAWN" then
+            stopDuck("หยุด: ตัวละครไม่พร้อมระหว่างเสก\nตรวจว่าบอสเกิดแล้วหรือไม่ก่อนเปิดใหม่")
+        else
+            duck.visitedCharacter = nil
+            duck.warpDeadline = now + DUCK_RETURN_TIMEOUT
+            duck.returnMoved = false
+            duck.deadline = now + DUCK_RETURN_TIMEOUT
+            duckStatus.Text = "รอตัวละครเกิดใหม่หรือลงจากที่นั่ง..."
+        end
+        return
+    end
+
+    if duck.phase == "FIGHT" then
+        local boss = duck.boss
+        if not boss then stopDuck("ไม่พบข้อมูลบอสที่ล็อกไว้") return end
+        if duck.deathSeen or boss.humanoid.Health <= 0 then
+            duck.fought = duck.fought + 1
+            clearDuckBoss()
+            duck.phase = "COOLDOWN"
+            duck.deadline = now + 2
+            duckStatus.Text = "บอสตายแล้ว • รอบที่สำเร็จ " .. duck.fought .. "\nกำลังรอกลับจุดเสก..."
+            return
+        end
+        if not isAlive(boss) then
+            duck.missingSince = duck.missingSince or now
+            duckStatus.Text = "บอสหายจากข้อมูลที่โหลด แต่ยังไม่ยืนยันว่าตาย\nรอโหลดกลับก่อน ยังไม่เสกตัวใหม่"
+            if now - duck.missingSince >= 15 then
+                stopDuck("หยุด: บอสหายจากข้อมูลที่โหลดและยังยืนยันการตายไม่ได้\nตรวจบอสก่อนเปิดใหม่")
+            end
+            return
+        end
+        duck.missingSince = nil
+        local part = getPart(boss.model)
+        if not part then
+            if now >= duck.warpDeadline then stopDuck("รอตำแหน่งบอสไม่สำเร็จ ลองใหม่เมื่อโหลดครบ") end
+            return
+        end
+        if duck.visitedCharacter ~= character then
+            local ok, message = warp(boss)
+            if not ok then stopDuck(message) return end
+            duck.visitedCharacter = character
+            duck.arrivalAt = now + 1
+        end
+        -- Stop if the server rejects the warp rather than reporting arrival.
+        if now >= (duck.arrivalAt or now) and duck.arrivalAt then
+            duck.arrivalAt = nil
+            if (root.Position - part.Position).Magnitude > 35 then
+                stopDuck("หยุด: วาร์ปไปบอสไม่สำเร็จหรือบอสเคลื่อนออกไป\nตรวจตำแหน่งแล้วเปิดใหม่")
+                return
+            end
+        end
+        if duckMarker then
+            duckMarker.gui.Adornee = part
+            duckMarker.label.TextColor3 = Color3.fromRGB(255, 160, 70)
+            duckMarker.label.Text = string.format("DUCK BOSS [TARGET]\n%.0f studs",
+                (root.Position - part.Position).Magnitude)
+        end
+        duckStatus.Text = string.format(
+            "รอคุณจัดการบอส: %s\nHP: %.0f • สำเร็จแล้ว %d รอบ\nบอสตายแล้วจะกลับไปเสกใหม่",
+            boss.model.Name, boss.humanoid.Health, duck.fought)
+        return
+    end
+
+    if duck.phase == "COOLDOWN" then
+        if now >= duck.deadline then duck.phase = "SEEK" end
+        return
+    end
+
+    -- If a boss already exists, fight it before spending another summon.
+    local existing = findDuckBoss()
+    if existing then attachDuckBoss(existing) return end
+
+    if duck.phase == "SEEK" then
+        beginDuckReturn()
+    elseif duck.phase == "RETURN" then
+        if not duck.returnMoved then
+            local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
+            character:PivotTo(duck.returnRoot * rootToPivot)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            duck.returnMoved = true
+            duck.settleAt = now + 1
+            duckStatus.Text = "กลับจุดเสกแล้ว กำลังรอปุ่ม E..."
+            return
+        end
+        if now < duck.settleAt then return end
+        local ready, reason = summonPromptReady(root)
+        if not ready then
+            duckStatus.Text = "รอจุดเสก: " .. reason
+            if now >= duck.deadline then stopDuck("หยุด: " .. reason) end
+            return
+        end
+        readDuckInventory(true)
+        local missing = missingDuckItem()
+        if missing then
+            stopDuck("หยุด: Duck " .. missing .. " หมด (จำนวน 0)\nสำเร็จแล้ว " .. duck.fought .. " รอบ")
+            return
+        end
+        -- Let zero counts settle before treating them as authoritative.
+        for i = 1, 7 do
+            if duckCounts[i] == 0 then
+                duckStatus.Text = "กำลังยืนยันจำนวน Duck " .. i .. " ก่อนเสก..."
+                return
+            end
+        end
+        -- Arm state before beginning input, including zero-duration prompts.
+        duck.phase = "HOLD"
+        duck.deadline = now + math.max(0, duck.prompt.HoldDuration) + 0.2
+        duck.held = duck.prompt
+        duck.held:InputHoldBegin()
+        duckStatus.Text = "กำลังกดค้างเพื่อเสกเป็ด..."
+    elseif duck.phase == "HOLD" then
+        local position = duckPromptPosition(duck.prompt)
+        if not position or (root.Position - position).Magnitude > duck.prompt.MaxActivationDistance then
+            stopDuck("หยุด: ออกจากระยะกดเสกระหว่างกดค้าง\nตรวจว่าบอสเกิดแล้วหรือไม่ก่อนเปิดใหม่")
+            return
+        end
+        if now >= duck.deadline then
+            endDuckHold()
+            duck.phase = "WAIT_SPAWN"
+            duck.deadline = now + DUCK_SPAWN_TIMEOUT
+        end
+    elseif duck.phase == "WAIT_SPAWN" then
+        duckStatus.Text = string.format(
+            "กดเสกแล้ว รอตรวจพบบอสอีก %.0f วินาที\nหากไม่เกิด ระบบจะหยุด ไม่กดเสกซ้ำ",
+            math.max(0, duck.deadline - now))
+        if now >= duck.deadline then
+            stopDuck("หยุด: ไม่พบบอสหลังเสกใน 30 วินาที\nตรวจ Duck 1–7 ชื่อบอส และข้อความเกม\nจำนวน ? หมายถึงอ่านไอเทมไม่ได้")
+        end
+    end
+end
+
+bindDuck.Activated:Connect(function()
+    stopDuck("กำลังบันทึกจุดเสก...")
+    local ok, message = bindDuckPrompt()
+    duckStatus.Text = message
+    if ok then bindDuck.Text = "บันทึกจุดเสกแล้ว — กดเพื่อบันทึกใหม่" end
+end)
+duckTab.Activated:Connect(function() showPage("duck") end)
+duckName.FocusLost:Connect(function()
+    if duck.enabled then stopDuck("แก้ชื่อบอสแล้ว กดเปิดใหม่เพื่อใช้ชื่อใหม่") end
+end)
+duckButton.Activated:Connect(function()
+    if duck.enabled then stopDuck("หยุดเสกเป็ดแล้ว") return end
+    local ok, err = pcall(function()
+        if normalizeDuck(duckName.Text) == "" then
+            duckStatus.Text = "กรอกชื่อบอสก่อนครับ"
+            return
+        end
+        if not duck.prompt or not duck.prompt:IsDescendantOf(workspace) or not duck.returnRoot then
+            local bound, message = bindDuckPrompt()
+            if not bound then duckStatus.Text = message return end
+            bindDuck.Text = "บันทึกจุดเสกแล้ว — กดเพื่อบันทึกใหม่"
+        end
+        setAuto(false)
+        if flight then stopFlight("ปิดบินเพื่อเสกเป็ด") end
+        clearDuckBoss()
+        duck.enabled = true
+        duck.phase = "SEEK"
+        duck.fought = 0
+        duckButton.Text = "DUCK AUTO: ON — กดเพื่อหยุด"
+        duckButton.BackgroundColor3 = colors.green
+        duckStatus.Text = "เริ่มระบบเสกเป็ด กำลังตรวจหาบอสที่มีอยู่..."
+    end)
+    if not ok then
+        stopDuck("เปิดระบบเสกเป็ดไม่สำเร็จ ดู Console")
+        warn("Duck Auto:", err)
+    end
+end)
+
+
 local function autoStep(entries)
     if not auto then return end
 
@@ -593,10 +1096,11 @@ end
 
 local function update()
     local entries, total, root = collectTargets()
+    if currentPage == "duck" or duck.enabled then readDuckInventory(false) end
     local visible = {}
     local name = targets[selected].label
     pageTitle.Text = name
-    title.Text = name .. ": " .. total .. (auto and " [AUTO]" or "") .. (flight and " [FLY]" or "")
+    title.Text = name .. ": " .. total .. (auto and " [AUTO]" or "") .. (flight and " [FLY]" or "") .. (duck.enabled and " [DUCK]" or "")
     teleport.Text = "วาร์ปไป " .. name .. " ใกล้ที่สุด"
 
     for i, tab in ipairs(tabs) do
@@ -651,6 +1155,13 @@ local function update()
     if total == 0 then table.insert(lines, "No loaded living targets.") end
     output.Text = table.concat(lines, "\n")
     autoStep(entries)
+    if duck.enabled then
+        local ok, err = pcall(duckStep)
+        if not ok then
+            stopDuck("หยุดระบบเสกเป็ดเพราะเกิด Error ดู Console")
+            warn("Duck Auto:", err)
+        end
+    end
 end
 
 for i, tab in ipairs(tabs) do
@@ -680,6 +1191,7 @@ teleport.Activated:Connect(function()
     if os.clock() < nextWarpAt then return end
     nextWarpAt = os.clock() + 0.7
     if flight then stopFlight("ปิดบินเพื่อวาร์ป") end
+    if stopDuck then stopDuck("หยุดเสกเป็ดเพื่อวาร์ปเอง") end
 
     local ok, err = pcall(function()
         local entries = collectTargets()
@@ -702,6 +1214,7 @@ task.spawn(function()
         local ok, err = pcall(update)
         if not ok then
             setAuto(false)
+            if stopDuck then stopDuck("หยุดเพราะตัวสแกนเกิด Error ดู Console") end
             status.Text = "เกิด Error จึงหยุด AUTO ดู Console"
             warn("Target Locator:", err)
         end
