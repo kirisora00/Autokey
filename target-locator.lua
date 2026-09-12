@@ -1,4 +1,4 @@
--- Autokey v2.2: sidebar, flight, targets, and cancellable Duck Boss summon loop
+-- Autokey v2.3: sidebar, flight, targets, and cancellable Duck Boss summon loop
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -47,6 +47,12 @@ local duck = {enabled = false, phase = "IDLE", prompt = nil, returnRoot = nil,
     boss = nil, held = nil, deadline = 0, deathSeen = false, fought = 0}
 local duckConnections = {}
 local duckMarker = nil
+local releaseSkillKeys
+local skills = {enabled = true, selected = {Z = true, X = true, C = true, V = true, F = true},
+    cursor = 0, nextAt = 0, lastCastAt = -math.huge, held = {}, interval = 3, quiet = 3}
+local skillInput = nil
+local skillInputMode = nil
+skills.castTracks = {}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -126,7 +132,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 310), Size = UDim2.fromOffset(137, 65),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.2 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.3 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -139,6 +145,14 @@ local duckTab = create("TextButton", {
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, duckTab)
 
+local skillsTab = create("TextButton", {
+    Position = UDim2.fromOffset(10, 234), Size = UDim2.fromOffset(145, 38),
+    Text = "Skills / สกิล", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
+}, sidebar)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, skillsTab)
+
 local function makePage()
     return create("Frame", {
         Position = UDim2.fromOffset(181, 10),
@@ -150,6 +164,8 @@ local flightPage = makePage()
 flightPage.Visible = false
 local duckPage = makePage()
 duckPage.Visible = false
+local skillsPage = makePage()
+skillsPage.Visible = false
 
 local pageTitle = create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1,
@@ -236,7 +252,7 @@ create("TextLabel", {
     Position = UDim2.fromOffset(0, 42), Size = UDim2.new(1, 0, 0, 49),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-    Text = "ครั้งแรก: ยืนข้างเป็ดเล็กที่กด E แล้วบันทึกจุด\nระบบเสกและวาร์ปให้ ส่วนการโจมตีคุณทำเอง",
+    Text = "ครั้งแรก: ยืนข้างเป็ดเล็กที่กด E แล้วบันทึกจุด\nปิด AUTO สกิลเดิมของเกม แล้วเลือกปุ่มในเมนู Skills",
 }, duckPage)
 local bindDuck = create("TextButton", {
     Position = UDim2.fromOffset(0, 99), Size = UDim2.new(1, 0, 0, 37),
@@ -271,11 +287,69 @@ local duckStatus = create("TextLabel", {
     Text = "ยังไม่ได้บันทึกจุดเสก\nชื่อ DuckMonster อ้างอิงจากภาพและปรับได้\nกลับจุดเสกแล้วเริ่มนับ 10 วินาที หากบอสไม่เกิดจะหยุด",
 }, duckPage)
 
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1,
+    Text = "Skills / สกิลตอนถึงบอส", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 21,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, skillsPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 40), Size = UDim2.new(1, 0, 0, 52),
+    BackgroundTransparency = 1, TextColor3 = colors.muted, TextSize = 14,
+    TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+    Text = "ปิด AUTO สกิลเดิมของเกมก่อนใช้งาน\nระบบนี้กดสกิลเฉพาะตอน DUCK AUTO ถึงบอสและตัวนิ่ง",
+}, skillsPage)
+local skillButtons = {}
+local skillOrder = {"Z", "X", "C", "V", "F"}
+for i, key in ipairs(skillOrder) do
+    skillButtons[key] = create("TextButton", {
+        Position = UDim2.fromOffset((i - 1) * 81, 102),
+        Size = UDim2.fromOffset(73, 38), Text = key .. ": ON",
+        TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+        TextSize = 14, BackgroundColor3 = colors.green, BorderSizePixel = 0,
+    }, skillsPage)
+end
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 154), Size = UDim2.fromOffset(286, 32),
+    BackgroundTransparency = 1, TextColor3 = colors.muted, TextSize = 14,
+    TextXAlignment = Enum.TextXAlignment.Left, Text = "เว้นระหว่างสกิลอย่างน้อย (วินาที)",
+}, skillsPage)
+local skillInterval = create("TextBox", {
+    Position = UDim2.new(1, -97, 0, 154), Size = UDim2.fromOffset(97, 32),
+    BackgroundColor3 = colors.active, TextColor3 = Color3.new(1, 1, 1),
+    Text = "3", TextSize = 16, ClearTextOnFocus = false, BorderSizePixel = 0,
+}, skillsPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 196), Size = UDim2.fromOffset(286, 32),
+    BackgroundTransparency = 1, TextColor3 = colors.muted, TextSize = 14,
+    TextXAlignment = Enum.TextXAlignment.Left, Text = "รอหลังสกิลก่อนวาร์ปอย่างน้อย (วินาที)",
+}, skillsPage)
+local skillQuiet = create("TextBox", {
+    Position = UDim2.new(1, -97, 0, 196), Size = UDim2.fromOffset(97, 32),
+    BackgroundColor3 = colors.active, TextColor3 = Color3.new(1, 1, 1),
+    Text = "3", TextSize = 16, ClearTextOnFocus = false, BorderSizePixel = 0,
+}, skillsPage)
+local skillToggle = create("TextButton", {
+    Position = UDim2.fromOffset(0, 244), Size = UDim2.new(1, 0, 0, 42),
+    BackgroundColor3 = colors.green, TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 15,
+    Text = "BOSS SKILLS: ON — กดเพื่อปิด", BorderSizePixel = 0,
+}, skillsPage)
+local skillStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 298), Size = UDim2.new(1, 0, 0, 70),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "พร้อมรอ DUCK AUTO ถึงบอส\nหยุดส่งสกิลทันทีเมื่อบอสตาย และรอแอนิเมชันก่อนวาร์ป",
+}, skillsPage)
+
 local function showPage(page)
     currentPage = page
     targetPage.Visible = page == "target"
     flightPage.Visible = page == "flight"
     duckPage.Visible = page == "duck"
+    skillsPage.Visible = page == "skills"
+    skillsTab.BackgroundColor3 = page == "skills" and colors.active or colors.sidebar
     duckTab.BackgroundColor3 = page == "duck" and colors.active or colors.sidebar
     flightTab.BackgroundColor3 = page == "flight" and colors.active or colors.sidebar
     for i, tab in ipairs(tabs) do
@@ -487,6 +561,7 @@ end)
 gui.Destroying:Connect(function()
     running = false
     for _, connection in ipairs(flightConnections) do connection:Disconnect() end
+    if skills.animationConnection then skills.animationConnection:Disconnect() end
     stopFlight()
     if stopDuck then stopDuck("ปิดระบบแล้ว") end
     auto = false
@@ -640,6 +715,193 @@ local function endDuckHold()
     if prompt then pcall(function() prompt:InputHoldEnd() end) end
 end
 
+
+-- Own skill inputs only; native game AUTO toggles must be turned off by the player.
+local function initializeSkillInput()
+    if skillInput then return true end
+    local ok, input = pcall(function() return UserInputService:CreateVirtualInput() end)
+    if ok and input then
+        skillInput = input
+        skillInputMode = "virtual"
+        return true
+    end
+    -- Older test runners expose VirtualInputManager instead.
+    ok, input = pcall(function() return game:GetService("VirtualInputManager") end)
+    if ok and input then
+        skillInput = input
+        skillInputMode = "manager"
+        return true
+    end
+    return false
+end
+
+local function sendSkillKey(key, down)
+    if skillInputMode == "virtual" then
+        skillInput:SendKey(down, Enum.KeyCode[key], false)
+    else
+        skillInput:SendKeyEvent(down, Enum.KeyCode[key], false, game)
+    end
+end
+
+releaseSkillKeys = function()
+    for key in pairs(skills.held) do
+        local ok, err = pcall(function() sendSkillKey(key, false) end)
+        if ok then
+            skills.held[key] = nil
+        else
+            warn("Autokey key release:", key, err)
+        end
+    end
+end
+
+local function actionAnimationPlaying(character)
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+    if not animator then return false end
+    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+        local priority = track.Priority
+        local action = priority == Enum.AnimationPriority.Action
+            or priority == Enum.AnimationPriority.Action2
+            or priority == Enum.AnimationPriority.Action3
+            or priority == Enum.AnimationPriority.Action4
+        local captured = skills.animationCharacter == character and skills.castTracks[track]
+        if (action or captured) and not track.Looped and (track.IsPlaying or track.WeightCurrent > 0.01) then
+            return true
+        end
+    end
+    return false
+end
+
+local function duckMovementReady(character, root)
+    if next(skills.held) then return false, "รอปล่อยปุ่มสกิล" end
+    if os.clock() < skills.lastCastAt + skills.quiet then
+        return false, "รอพักหลังสกิลก่อนวาร์ป"
+    end
+    if root.Anchored then return false, "รอเกมปลดการยึดตัวละครจากสกิล" end
+    if actionAnimationPlaying(character) then return false, "รอแอนิเมชันสกิลจบ" end
+    if root.AssemblyLinearVelocity.Magnitude > 30 then
+        return false, "รอตัวละครนิ่งหลังใช้สกิล"
+    end
+    return true
+end
+
+local function watchSkillAnimations(character)
+    if skills.animationCharacter == character and skills.animationConnection then return end
+    if skills.animationConnection then skills.animationConnection:Disconnect() end
+    skills.animationConnection = nil
+    skills.animationCharacter = character
+    table.clear(skills.castTracks)
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    skills.animationConnection = animator.AnimationPlayed:Connect(function(track)
+        -- Also remember skill animations authored with a non-Action priority.
+        if os.clock() - skills.lastCastAt <= 1.5 and not track.Looped then
+            skills.castTracks[track] = true
+        end
+    end)
+end
+
+local function useDuckSkill(character, root, boss)
+    if not skills.enabled then return end
+    if UserInputService:GetFocusedTextBox() then
+        skillStatus.Text = "พักสกิลระหว่างพิมพ์ข้อความ"
+        return
+    end
+    if not duck.enabled or duck.phase ~= "FIGHT" or not duck.combatReady
+        or duck.deathSeen or boss.humanoid.Health <= 0 then return end
+    if os.clock() < skills.nextAt or next(skills.held) then return end
+    if root.Anchored or actionAnimationPlaying(character) then
+        skillStatus.Text = "รอสกิลก่อนหน้าจบ..."
+        return
+    end
+    local key
+    for _ = 1, #skillOrder do
+        skills.cursor = skills.cursor % #skillOrder + 1
+        local candidate = skillOrder[skills.cursor]
+        if skills.selected[candidate] then key = candidate break end
+    end
+    if not key then skillStatus.Text = "ยังไม่ได้เลือกปุ่มสกิล" return end
+
+    if not initializeSkillInput() then
+        skills.enabled = false
+        skillToggle.Text = "BOSS SKILLS: OFF"
+        skillStatus.Text = "ตัวรันไม่รองรับการจำลองปุ่มสกิล"
+        stopDuck("หยุด: ตัวรันไม่รองรับปุ่มสกิล ดูเมนู Skills")
+        return
+    end
+    watchSkillAnimations(character)
+    local ok, err = pcall(function()
+        -- Remember the key before sending, so errors and cancellation still release it.
+        skills.held[key] = true
+        skills.lastCastAt = os.clock()
+        skills.nextAt = os.clock() + skills.interval
+        sendSkillKey(key, true)
+    end)
+    if not ok then
+        releaseSkillKeys()
+        skills.enabled = false
+        skillToggle.Text = "BOSS SKILLS: OFF"
+        skillToggle.BackgroundColor3 = colors.active
+        skillStatus.Text = "ส่งปุ่มไม่สำเร็จ ปิดแชต/เมนู Roblox แล้วลองใหม่\nหากยังไม่ได้ ตัวรันอาจไม่รองรับ"
+        stopDuck("หยุด: ส่งสกิลไม่สำเร็จ ดูเมนู Skills และ Console")
+        warn("Autokey skill input:", err)
+        return
+    end
+    skillStatus.Text = "ส่งสกิล " .. key .. " แล้ว • รอสกิลก่อนหน้าจบ"
+    task.delay(0.12, function()
+        if skills.held[key] then
+            local released, releaseError = pcall(function() sendSkillKey(key, false) end)
+            if released then
+                skills.held[key] = nil
+            else
+                releaseSkillKeys()
+                if running then stopDuck("หยุด: ปล่อยปุ่มสกิลไม่สำเร็จ ปิดแชต/เมนู Roblox") end
+                warn("Autokey skill release:", releaseError)
+            end
+        end
+    end)
+end
+
+for key, button in pairs(skillButtons) do
+    local selectedKey = key
+    local selectedButton = button
+    selectedButton.Activated:Connect(function()
+        skills.selected[selectedKey] = not skills.selected[selectedKey]
+        selectedButton.Text = selectedKey .. (skills.selected[selectedKey] and ": ON" or ": OFF")
+        selectedButton.BackgroundColor3 = skills.selected[selectedKey] and colors.green or colors.active
+        if not skills.selected[selectedKey] then releaseSkillKeys() end
+    end)
+end
+skillToggle.Activated:Connect(function()
+    skills.enabled = not skills.enabled
+    if not skills.enabled then releaseSkillKeys() end
+    skillToggle.Text = skills.enabled and "BOSS SKILLS: ON — กดเพื่อปิด" or "BOSS SKILLS: OFF — กดเพื่อเปิด"
+    skillToggle.BackgroundColor3 = skills.enabled and colors.green or colors.active
+end)
+skillInterval.FocusLost:Connect(function()
+    skills.interval = math.clamp(tonumber(skillInterval.Text) or 3, 1, 30)
+    skillInterval.Text = tostring(skills.interval)
+end)
+skillQuiet.FocusLost:Connect(function()
+    skills.quiet = math.clamp(tonumber(skillQuiet.Text) or 3, 2, 30)
+    skillQuiet.Text = tostring(skills.quiet)
+end)
+skillsTab.Activated:Connect(function() showPage("skills") end)
+table.insert(flightConnections, UserInputService.InputBegan:Connect(function(input)
+    if duck.enabled and skills.selected[input.KeyCode.Name]
+        and not UserInputService:GetFocusedTextBox() then
+        skills.lastCastAt = os.clock()
+    end
+end))
+table.insert(flightConnections, UserInputService.WindowFocusReleased:Connect(function()
+    releaseSkillKeys()
+end))
+table.insert(flightConnections, UserInputService.TextBoxFocused:Connect(function()
+    releaseSkillKeys()
+end))
+
+
 local function clearDuckBoss()
     for _, connection in ipairs(duckConnections) do connection:Disconnect() end
     table.clear(duckConnections)
@@ -647,10 +909,14 @@ local function clearDuckBoss()
     duck.boss = nil
     duck.deathSeen = false
     duck.visitedCharacter = nil
+    duck.combatReady = false
+    duck.stableSince = nil
+    duck.retries = 0
 end
 
 stopDuck = function(message)
     duck.enabled = false
+    if releaseSkillKeys then releaseSkillKeys() end
     endDuckHold()
     clearDuckBoss()
     duck.phase = "IDLE"
@@ -723,8 +989,14 @@ local function attachDuckBoss(entry)
     clearDuckBoss()
     duck.boss = entry
     duck.deathSeen = entry.humanoid.Health <= 0
+    duck.nextApproachAt = 0
+    skills.nextAt = 0
     local function markDead()
-        if duck.boss == entry then duck.deathSeen = true end
+        if duck.boss == entry then
+            duck.deathSeen = true
+            duck.combatReady = false
+            releaseSkillKeys()
+        end
     end
     table.insert(duckConnections, entry.humanoid.Died:Connect(markDead))
     table.insert(duckConnections, entry.humanoid.HealthChanged:Connect(function(health)
@@ -760,6 +1032,9 @@ local function duckStep()
     local now = os.clock()
     local character, root = duckCharacter()
     if not character then
+        releaseSkillKeys()
+        duck.combatReady = false
+        duck.stableSince = nil
         if duck.phase == "HOLD" or duck.phase == "WAIT_SPAWN"
             or (duck.phase == "RETURN" and duck.spawnDeadline) then
             stopDuck("หยุด: ตัวละครไม่พร้อมระหว่างเสก\nตรวจว่าบอสเกิดแล้วหรือไม่ก่อนเปิดใหม่")
@@ -777,6 +1052,7 @@ local function duckStep()
         local boss = duck.boss
         if not boss then stopDuck("ไม่พบข้อมูลบอสที่ล็อกไว้") return end
         if duck.deathSeen or boss.humanoid.Health <= 0 then
+            releaseSkillKeys()
             duck.fought = duck.fought + 1
             clearDuckBoss()
             duck.phase = "COOLDOWN"
@@ -785,6 +1061,9 @@ local function duckStep()
             return
         end
         if not isAlive(boss) then
+            releaseSkillKeys()
+            duck.combatReady = false
+            duck.stableSince = nil
             duck.missingSince = duck.missingSince or now
             duckStatus.Text = "บอสหายจากข้อมูลที่โหลด แต่ยังไม่ยืนยันว่าตาย\nรอโหลดกลับก่อน ยังไม่เสกตัวใหม่"
             if now - duck.missingSince >= 15 then
@@ -798,19 +1077,47 @@ local function duckStep()
             if now >= duck.warpDeadline then stopDuck("รอตำแหน่งบอสไม่สำเร็จ ลองใหม่เมื่อโหลดครบ") end
             return
         end
-        if duck.visitedCharacter ~= character then
-            local ok, message = warp(boss)
-            if not ok then stopDuck(message) return end
-            duck.visitedCharacter = character
-            duck.arrivalAt = now + 1
-        end
-        -- Stop if the server rejects the warp rather than reporting arrival.
-        if now >= (duck.arrivalAt or now) and duck.arrivalAt then
-            duck.arrivalAt = nil
-            if (root.Position - part.Position).Magnitude > 35 then
-                stopDuck("หยุด: วาร์ปไปบอสไม่สำเร็จหรือบอสเคลื่อนออกไป\nตรวจตำแหน่งแล้วเปิดใหม่")
+        local distance = (root.Position - part.Position).Magnitude
+        if duck.visitedCharacter ~= character or distance > 35 then
+            duck.combatReady = false
+            duck.stableSince = nil
+            releaseSkillKeys()
+            local ready, reason = duckMovementReady(character, root)
+            if not ready then
+                duckStatus.Text = "พักสกิลก่อนเข้าหาบอส: " .. reason
                 return
             end
+            if now < (duck.nextApproachAt or 0) then
+                duckStatus.Text = "กำลังรอตำแหน่งหลังวาร์ป ยังไม่ส่งสกิล..."
+                return
+            end
+            if (duck.retries or 0) >= 3 then
+                duckStatus.Text = "AUTO ยังเปิดอยู่ แต่พักสกิล: วาร์ปยังไม่ถึงบอส\nเข้าหาบอสเอง หรือปิด/เปิด DUCK AUTO เพื่อลองใหม่"
+                return
+            end
+            local ok, message = warp(boss)
+            if not ok then duckStatus.Text = message return end
+            duck.visitedCharacter = character
+            duck.retries = (duck.retries or 0) + 1
+            duck.nextApproachAt = now + 3
+            duckStatus.Text = "วาร์ปไปบอสแล้ว รอให้ตัวนิ่งก่อนใช้สกิล..."
+            return
+        end
+        if root.Anchored or root.AssemblyLinearVelocity.Magnitude > 25 then
+            duck.combatReady = false
+            duck.stableSince = nil
+            duckStatus.Text = "พักสกิล: รอให้ตัวนิ่งใกล้บอส..."
+            return
+        end
+        if not duck.combatReady then
+            if now < (duck.nextApproachAt or 0) or actionAnimationPlaying(character) then
+                duckStatus.Text = "รอหลังวาร์ป/แอนิเมชันก่อนเริ่มสกิล..."
+                return
+            end
+            duck.stableSince = duck.stableSince or now
+            if now - duck.stableSince < 1 then return end
+            duck.combatReady = true
+            duck.retries = 0
         end
         if duckMarker then
             duckMarker.gui.Adornee = part
@@ -819,13 +1126,21 @@ local function duckStep()
                 (root.Position - part.Position).Magnitude)
         end
         duckStatus.Text = string.format(
-            "รอคุณจัดการบอส: %s\nHP: %.0f • สำเร็จแล้ว %d รอบ\nบอสตายแล้วจะกลับไปเสกใหม่",
+            "อยู่ใกล้บอส: %s\nHP: %.0f • สำเร็จแล้ว %d รอบ\nบอสตายแล้วจะพักสกิลก่อนวาร์ปกลับ",
             boss.model.Name, boss.humanoid.Health, duck.fought)
+        useDuckSkill(character, root, boss)
         return
     end
 
     if duck.phase == "COOLDOWN" then
-        if now >= duck.deadline then duck.phase = "SEEK" end
+        releaseSkillKeys()
+        if now < duck.deadline then return end
+        local ready, reason = duckMovementReady(character, root)
+        if not ready then
+            duckStatus.Text = "บอสตายแล้ว หยุดส่งสกิล • " .. reason
+            return
+        end
+        duck.phase = "SEEK"
         return
     end
 
@@ -844,6 +1159,12 @@ local function duckStep()
         beginDuckReturn()
     elseif duck.phase == "RETURN" then
         if not duck.returnMoved then
+            releaseSkillKeys()
+            local ready, reason = duckMovementReady(character, root)
+            if not ready then
+                duckStatus.Text = "รอก่อนกลับจุดเสก: " .. reason
+                return
+            end
             local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
             character:PivotTo(duck.returnRoot * rootToPivot)
             root.AssemblyLinearVelocity = Vector3.zero
