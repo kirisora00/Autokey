@@ -1,4 +1,4 @@
--- Autokey v2.3: sidebar, flight, targets, and cancellable Duck Boss summon loop
+-- Autokey v2.4: sidebar, flight, targets, and cancellable Duck Boss summon loop
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -47,9 +47,10 @@ local duck = {enabled = false, phase = "IDLE", prompt = nil, returnRoot = nil,
     boss = nil, held = nil, deadline = 0, deathSeen = false, fought = 0}
 local duckConnections = {}
 local duckMarker = nil
+local releaseReturnGuard
 local releaseSkillKeys
 local skills = {enabled = true, selected = {Z = true, X = true, C = true, V = true, F = true},
-    cursor = 0, nextAt = 0, lastCastAt = -math.huge, held = {}, interval = 3, quiet = 3}
+    cursor = 0, nextAt = 0, lastCastAt = -math.huge, held = {}, interval = 3, quiet = 6}
 local skillInput = nil
 local skillInputMode = nil
 skills.castTracks = {}
@@ -132,7 +133,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 310), Size = UDim2.fromOffset(137, 65),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.3 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.4 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -284,7 +285,7 @@ local duckStatus = create("TextLabel", {
     TextSize = 14, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ยังไม่ได้บันทึกจุดเสก\nชื่อ DuckMonster อ้างอิงจากภาพและปรับได้\nกลับจุดเสกแล้วเริ่มนับ 10 วินาที หากบอสไม่เกิดจะหยุด",
+    Text = "ยังไม่ได้บันทึกจุดเสก\nชื่อ DuckMonster อ้างอิงจากภาพและปรับได้\nยืนในระยะเสกนิ่งแล้วเริ่มนับ 10 วินาที หากบอสไม่เกิดจะหยุด",
 }, duckPage)
 
 create("TextLabel", {
@@ -327,7 +328,7 @@ create("TextLabel", {
 local skillQuiet = create("TextBox", {
     Position = UDim2.new(1, -97, 0, 196), Size = UDim2.fromOffset(97, 32),
     BackgroundColor3 = colors.active, TextColor3 = Color3.new(1, 1, 1),
-    Text = "3", TextSize = 16, ClearTextOnFocus = false, BorderSizePixel = 0,
+    Text = "6", TextSize = 16, ClearTextOnFocus = false, BorderSizePixel = 0,
 }, skillsPage)
 local skillToggle = create("TextButton", {
     Position = UDim2.fromOffset(0, 244), Size = UDim2.new(1, 0, 0, 42),
@@ -758,6 +759,9 @@ local function actionAnimationPlaying(character)
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
     if not animator then return false end
+    for track in pairs(skills.castTracks) do
+        if not track.IsPlaying and track.WeightCurrent <= 0.01 then skills.castTracks[track] = nil end
+    end
     for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
         local priority = track.Priority
         local action = priority == Enum.AnimationPriority.Action
@@ -772,14 +776,14 @@ local function actionAnimationPlaying(character)
     return false
 end
 
-local function duckMovementReady(character, root)
+local function duckMovementReady(character, root, returning)
     if next(skills.held) then return false, "รอปล่อยปุ่มสกิล" end
     if os.clock() < skills.lastCastAt + skills.quiet then
         return false, "รอพักหลังสกิลก่อนวาร์ป"
     end
     if root.Anchored then return false, "รอเกมปลดการยึดตัวละครจากสกิล" end
     if actionAnimationPlaying(character) then return false, "รอแอนิเมชันสกิลจบ" end
-    if root.AssemblyLinearVelocity.Magnitude > 30 then
+    if not returning and root.AssemblyLinearVelocity.Magnitude > 30 then
         return false, "รอตัวละครนิ่งหลังใช้สกิล"
     end
     return true
@@ -884,7 +888,7 @@ skillInterval.FocusLost:Connect(function()
     skillInterval.Text = tostring(skills.interval)
 end)
 skillQuiet.FocusLost:Connect(function()
-    skills.quiet = math.clamp(tonumber(skillQuiet.Text) or 3, 2, 30)
+    skills.quiet = math.clamp(tonumber(skillQuiet.Text) or 6, 2, 30)
     skillQuiet.Text = tostring(skills.quiet)
 end)
 skillsTab.Activated:Connect(function() showPage("skills") end)
@@ -902,7 +906,103 @@ table.insert(flightConnections, UserInputService.TextBoxFocused:Connect(function
 end))
 
 
+
+-- A short, scoped physics guard for return warps; always restore on cancel/error.
+local function clearCharacterMomentum(character)
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+end
+
+releaseReturnGuard = function()
+    local guard = duck.returnGuard
+    duck.returnGuard = nil
+    if not guard then return end
+    -- Restore Anchored even if clearing momentum fails during character removal.
+    pcall(function() clearCharacterMomentum(guard.character) end)
+    if guard.root.Parent then
+        guard.root.Anchored = guard.anchored
+    end
+end
+
+local function safeDuckReturnPose(character, root)
+    local promptPosition = duckPromptPosition(duck.prompt)
+    if not promptPosition then return nil, "จุดเสกยังไม่โหลดหรือหายไป" end
+
+    local ray = RaycastParams.new()
+    ray.FilterType = Enum.RaycastFilterType.Exclude
+    ray.FilterDescendantsInstances = {character}
+    ray.RespectCanCollide = true
+    ray.IgnoreWater = true
+
+    local overlap = OverlapParams.new()
+    overlap.FilterType = Enum.RaycastFilterType.Exclude
+    overlap.FilterDescendantsInstances = {character}
+    overlap.RespectCanCollide = true
+    overlap.MaxParts = 0
+
+    local offsets = {
+        Vector3.zero, Vector3.new(3, 0, 0), Vector3.new(-3, 0, 0),
+        Vector3.new(0, 0, 3), Vector3.new(0, 0, -3),
+    }
+    local saved = duck.returnRoot
+    local clearance = duck.floorClearance or 3
+    local startIndex = ((duck.returnAttempts or 0) % #offsets) + 1
+    for n = 0, #offsets - 1 do
+        local offset = offsets[((startIndex + n - 1) % #offsets) + 1]
+        local base = saved.Position + offset
+        local floor = workspace:Raycast(base + Vector3.new(0, 4, 0), Vector3.new(0, -16, 0), ray)
+        if floor and floor.Normal.Y >= 0.65 then
+            local position = Vector3.new(base.X, floor.Position.Y + clearance + 0.15, base.Z)
+            local pose = CFrame.new(position) * saved.Rotation
+            local inRange = (position - promptPosition).Magnitude <= duck.prompt.MaxActivationDistance - 0.25
+            local free = inRange
+            if free then
+                for _, part in ipairs(workspace:GetPartBoundsInBox(
+                    pose, root.Size + Vector3.new(0.8, 0.8, 0.8), overlap
+                )) do
+                    if part.CanCollide and part ~= floor.Instance then free = false break end
+                end
+            end
+            if free then return pose end
+        end
+    end
+    return nil, "ไม่พบพื้นว่างในระยะเสก ยืนข้างเป็ดบนพื้นโล่งแล้วบันทึกจุดใหม่"
+end
+
+local function startDuckReturnWarp(character, root)
+    releaseReturnGuard()
+    local pose, reason = safeDuckReturnPose(character, root)
+    if not pose then return false, reason end
+    if root.Anchored then return false, "รอเกมปลดการยึดตัวละครก่อน" end
+
+    duck.returnAttempts = (duck.returnAttempts or 0) + 1
+    local guard = {character = character, root = root, anchored = root.Anchored}
+    duck.returnGuard = guard
+    -- Schedule restoration before changing physics, so later failures cannot leave it anchored.
+    task.delay(0.4, function()
+        if duck.returnGuard == guard then releaseReturnGuard() end
+    end)
+    root.Anchored = true
+    clearCharacterMomentum(character)
+    local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
+    character:PivotTo(pose * rootToPivot)
+    clearCharacterMomentum(character)
+
+    duck.returnPose = pose
+    duck.returnMoved = true
+    duck.settleAt = os.clock() + 1
+    duck.returnCheckUntil = os.clock() + 4
+    duck.returnStableSince = nil
+    return true
+end
+
+
 local function clearDuckBoss()
+    if releaseReturnGuard then releaseReturnGuard() end
     for _, connection in ipairs(duckConnections) do connection:Disconnect() end
     table.clear(duckConnections)
     if duckMarker then duckMarker.gui:Destroy() duckMarker = nil end
@@ -952,6 +1052,13 @@ local function bindDuckPrompt()
     end
     duck.prompt = closest
     duck.returnRoot = root.CFrame
+    local floorRay = RaycastParams.new()
+    floorRay.FilterType = Enum.RaycastFilterType.Exclude
+    floorRay.FilterDescendantsInstances = {player.Character}
+    floorRay.RespectCanCollide = true
+    floorRay.IgnoreWater = true
+    local ground = workspace:Raycast(root.Position, Vector3.new(0, -10, 0), floorRay)
+    duck.floorClearance = ground and math.clamp(root.Position.Y - ground.Position.Y, 2, 6) or 3
     return true, string.format(
         "บันทึกจุดเสกแล้ว • ระยะ %.1f studs\nปุ่ม %s • ต้องกดค้าง %.1f วินาที\nกด DUCK AUTO เพื่อเริ่ม",
         distance, closest.KeyboardKeyCode.Name, closest.HoldDuration
@@ -1021,6 +1128,9 @@ local function summonPromptReady(root)
 end
 
 local function beginDuckReturn()
+    releaseReturnGuard()
+    duck.returnAttempts = 0
+    duck.returnStableSince = nil
     duck.phase = "RETURN"
     duck.spawnDeadline = nil
     duck.deadline = os.clock() + DUCK_RETURN_TIMEOUT
@@ -1032,6 +1142,7 @@ local function duckStep()
     local now = os.clock()
     local character, root = duckCharacter()
     if not character then
+        releaseReturnGuard()
         releaseSkillKeys()
         duck.combatReady = false
         duck.stableSince = nil
@@ -1135,7 +1246,7 @@ local function duckStep()
     if duck.phase == "COOLDOWN" then
         releaseSkillKeys()
         if now < duck.deadline then return end
-        local ready, reason = duckMovementReady(character, root)
+        local ready, reason = duckMovementReady(character, root, true)
         if not ready then
             duckStatus.Text = "บอสตายแล้ว หยุดส่งสกิล • " .. reason
             return
@@ -1148,10 +1259,10 @@ local function duckStep()
     local existing = findDuckBoss()
     if existing then attachDuckBoss(existing) return end
 
-    -- One 10-second window from returning to the summon point.
-    -- Waiting for the prompt, holding it, and waiting for spawn share this deadline.
+    -- Start the 10-second summon window only after stable arrival in prompt range.
+    -- Return recovery never spends a summon; HOLD and WAIT_SPAWN share one deadline.
     if duck.spawnDeadline and now >= duck.spawnDeadline then
-        stopDuck("หยุด AUTO: กลับจุดเสกแล้วบอสไม่เกิดภายใน 10 วินาที\nกดเปิดใหม่เมื่อต้องการลองอีกครั้ง")
+        stopDuck("หยุด AUTO: ถึงจุดเสกและกดเสกแล้ว บอสไม่เกิดภายใน 10 วินาที\nกดเปิดใหม่เมื่อต้องการลองอีกครั้ง")
         return
     end
 
@@ -1160,38 +1271,62 @@ local function duckStep()
     elseif duck.phase == "RETURN" then
         if not duck.returnMoved then
             releaseSkillKeys()
-            local ready, reason = duckMovementReady(character, root)
+            local ready, reason = duckMovementReady(character, root, true)
             if not ready then
                 duckStatus.Text = "รอก่อนกลับจุดเสก: " .. reason
                 return
             end
-            local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
-            character:PivotTo(duck.returnRoot * rootToPivot)
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-            duck.returnMoved = true
-            duck.spawnDeadline = os.clock() + DUCK_SPAWN_TIMEOUT
-            duck.settleAt = now + 1
-            duckStatus.Text = "กลับจุดเสกแล้ว เริ่มนับ 10 วินาที กำลังรอปุ่ม E..."
+            if (duck.returnAttempts or 0) >= 3 then
+                stopDuck("กลับจุดเสกแล้วยังไม่นิ่งหลังลอง 3 ครั้ง\nปิด AUTO สกิลเดิม ยืนบนพื้นโล่งข้างเป็ดแล้วบันทึกจุดใหม่")
+                return
+            end
+            local moved, message = startDuckReturnWarp(character, root)
+            if not moved then stopDuck(message) return end
+            duckStatus.Text = "กลับจุดเสกครั้งที่ " .. duck.returnAttempts .. "\nกำลังหยุดแรงเหวี่ยงและรอให้ยืนนิ่ง..."
             return
         end
-        if now < duck.settleAt then return end
+        if duck.returnGuard or now < duck.settleAt then return end
+        local position = duckPromptPosition(duck.prompt)
+        local near = position and (root.Position - position).Magnitude <= duck.prompt.MaxActivationDistance
+        local stable = near and not root.Anchored
+            and (root.Position - duck.returnPose.Position).Magnitude <= 3
+            and root.AssemblyLinearVelocity.Magnitude <= 8
+            and root.AssemblyAngularVelocity.Magnitude <= 3
+            and not actionAnimationPlaying(character)
+
+        if not stable then
+            duck.returnStableSince = nil
+            duckStatus.Text = "ยังยืนไม่มั่นคงหรือกระเด็นออกจากจุดเสก\nกำลังรอแก้ตำแหน่ง ยังไม่กด E..."
+            if now >= duck.returnCheckUntil then
+                duck.returnMoved = false
+                duck.spawnDeadline = nil
+            end
+            return
+        end
+        duck.returnStableSince = duck.returnStableSince or now
+        if now - duck.returnStableSince < 1 then
+            duckStatus.Text = "อยู่ในระยะเสกแล้ว ตรวจว่ายืนนิ่ง..."
+            return
+        end
+
+        -- No timer reset after holding starts; never duplicate an uncertain summon.
+        if not duck.spawnDeadline then duck.spawnDeadline = now + DUCK_SPAWN_TIMEOUT end
         local ready, reason = summonPromptReady(root)
         if not ready then
             duckStatus.Text = "รอจุดเสก: " .. reason
-            if now >= duck.deadline then stopDuck("หยุด: " .. reason) end
             return
         end
-        -- Arm state before beginning input, including zero-duration prompts.
         duck.phase = "HOLD"
         duck.deadline = now + math.max(0, duck.prompt.HoldDuration) + 0.2
         duck.held = duck.prompt
         duck.held:InputHoldBegin()
-        duckStatus.Text = "กำลังกดค้างเพื่อเสกเป็ด..."
+        duckStatus.Text = "ยืนนิ่งแล้ว กำลังกดเสก • รอบนี้รอบอสไม่เกิน 10 วินาที"
     elseif duck.phase == "HOLD" then
         local position = duckPromptPosition(duck.prompt)
         if not position or (root.Position - position).Magnitude > duck.prompt.MaxActivationDistance then
-            stopDuck("หยุด: ออกจากระยะกดเสกระหว่างกดค้าง\nตรวจว่าบอสเกิดแล้วหรือไม่ก่อนเปิดใหม่")
+            endDuckHold()
+            duck.phase = "WAIT_SPAWN"
+            duckStatus.Text = "หลุดระยะระหว่างกดเสก รอตรวจว่าบอสเกิดแล้วหรือไม่\nยังไม่กดเสกซ้ำ"
             return
         end
         if now >= duck.deadline then
