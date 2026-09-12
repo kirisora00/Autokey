@@ -1,4 +1,4 @@
--- Autokey v2.1: sidebar, flight, targets, and cancellable Duck Boss summon loop
+-- Autokey v2.2: sidebar, flight, targets, and cancellable Duck Boss summon loop
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -126,7 +126,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 310), Size = UDim2.fromOffset(137, 65),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.1 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.2 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -262,20 +262,13 @@ local duckButton = create("TextButton", {
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 16, Text = "DUCK AUTO: OFF — กดเพื่อเริ่ม",
 }, duckPage)
-local duckInventory = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 241), Size = UDim2.new(1, 0, 0, 34),
-    BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(204, 218, 230),
-    Font = Enum.Font.Code, TextSize = 13, TextWrapped = true,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Text = "Duck 1–7: ? / ? / ? / ? / ? / ? / ?",
-}, duckPage)
 local duckStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 282), Size = UDim2.new(1, 0, 0, 89),
+    Position = UDim2.fromOffset(0, 245), Size = UDim2.new(1, 0, 0, 125),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 14, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ยังไม่ได้บันทึกจุดเสก\nชื่อ DuckMonster อ้างอิงจากภาพและปรับได้\nหากกดเสกแล้วไม่เกิดภายใน 30 วินาที ระบบจะหยุด",
+    Text = "ยังไม่ได้บันทึกจุดเสก\nชื่อ DuckMonster อ้างอิงจากภาพและปรับได้\nกลับจุดเสกแล้วเริ่มนับ 10 วินาที หากบอสไม่เกิดจะหยุด",
 }, duckPage)
 
 local function showPage(page)
@@ -615,119 +608,10 @@ end
 
 
 -- Duck summon loop: bind the actual nearby ProximityPrompt; never call guessed remotes.
-local DUCK_SPAWN_TIMEOUT = 30
+local DUCK_SPAWN_TIMEOUT = 10
 local DUCK_RETURN_TIMEOUT = 15
 local function normalizeDuck(text)
     return string.lower(tostring(text or "")):gsub("[%s%p]", "")
-end
-
-
--- Read replicated inventory data only. Missing/unrecognized data stays unknown.
-local duckCounts = {}
-local duckZeroSince = {}
-local duckInventoryNext = 0
-local duckToolsConfirmed = false
-local function duckItemIndex(name)
-    local value = normalizeDuck(name):match("^duck([1-7])$")
-    return value and tonumber(value) or nil
-end
-local function inventoryNumber(value)
-    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge then
-        return nil
-    end
-    return math.floor(value)
-end
-local function stackAmount(object)
-    if object:IsA("IntValue") or object:IsA("NumberValue") then
-        return inventoryNumber(object.Value)
-    end
-    for _, key in ipairs({"Count", "Amount", "Quantity", "count", "amount", "quantity"}) do
-        local attribute = inventoryNumber(object:GetAttribute(key))
-        if attribute ~= nil then return attribute end
-        local child = object:FindFirstChild(key)
-        if child and (child:IsA("IntValue") or child:IsA("NumberValue")) then
-            local value = inventoryNumber(child.Value)
-            if value ~= nil then return value end
-        end
-    end
-    return nil
-end
-
-local function readDuckInventory(force)
-    local now = os.clock()
-    if not force and now < duckInventoryNext then return end
-    duckInventoryNext = now + 1
-    local numeric, toolsFound = {}, {}
-    for i = 1, 7 do numeric[i] = {} toolsFound[i] = 0 end
-
-    local function visit(object, toolsOnly)
-        if object:IsA("Tool") then
-            local i = duckItemIndex(object.Name)
-            if i then toolsFound[i] = toolsFound[i] + (stackAmount(object) or 1) end
-            return
-        end
-        if toolsOnly then return end
-        -- Tool stack fields are already included by their owning Tool.
-        if object:FindFirstAncestorOfClass("Tool") then return end
-        local i = duckItemIndex(object.Name)
-        if i then
-            local amount = stackAmount(object)
-            if amount ~= nil then numeric[i][amount] = true end
-        end
-        for key, value in pairs(object:GetAttributes()) do
-            local index = duckItemIndex(key)
-            local amount = inventoryNumber(value)
-            if index and amount ~= nil then numeric[index][amount] = true end
-        end
-    end
-
-    visit(player, false)
-    for _, container in ipairs(player:GetChildren()) do
-        if not container:IsA("PlayerGui") and not container:IsA("PlayerScripts") then
-            visit(container, false)
-            for _, object in ipairs(container:GetDescendants()) do visit(object, false) end
-        end
-    end
-    if player.Character then
-        for _, object in ipairs(player.Character:GetDescendants()) do visit(object, true) end
-    end
-
-    local allToolsPresent = true
-    for i = 1, 7 do
-        if toolsFound[i] <= 0 then allToolsPresent = false end
-    end
-    if allToolsPresent then duckToolsConfirmed = true end
-
-    local display = {}
-    for i = 1, 7 do
-        local value, distinct = nil, 0
-        for amount in pairs(numeric[i]) do value = amount distinct = distinct + 1 end
-        if distinct > 1 then
-            value = nil -- Conflicting replicas: do not guess.
-        elseif distinct == 0 then
-            if toolsFound[i] > 0 or duckToolsConfirmed then value = toolsFound[i] end
-        elseif toolsFound[i] > 0 and toolsFound[i] ~= value then
-            value = nil
-        end
-        duckCounts[i] = value
-        if value == 0 then
-            duckZeroSince[i] = duckZeroSince[i] or now
-        else
-            duckZeroSince[i] = nil
-        end
-        display[i] = value == nil and "?" or tostring(value)
-    end
-    duckInventory.Text = "Duck 1–7: " .. table.concat(display, " / ")
-end
-
-local function missingDuckItem()
-    for i = 1, 7 do
-        if duckCounts[i] == 0 and duckZeroSince[i]
-            and os.clock() - duckZeroSince[i] >= 1 then
-            return i
-        end
-    end
-    return nil
 end
 
 
@@ -770,6 +654,7 @@ stopDuck = function(message)
     endDuckHold()
     clearDuckBoss()
     duck.phase = "IDLE"
+    duck.spawnDeadline = nil
     duckButton.Text = "DUCK AUTO: OFF — กดเพื่อเริ่ม"
     duckButton.BackgroundColor3 = colors.blue
     duckStatus.Text = message or "หยุดเสกเป็ดแล้ว"
@@ -846,6 +731,7 @@ local function attachDuckBoss(entry)
         if health <= 0 then markDead() end
     end))
     duck.phase = "FIGHT"
+    duck.spawnDeadline = nil
     duck.missingSince = nil
     duck.warpDeadline = os.clock() + DUCK_RETURN_TIMEOUT
     duckMarker = makeMarker(entry.part)
@@ -864,6 +750,7 @@ end
 
 local function beginDuckReturn()
     duck.phase = "RETURN"
+    duck.spawnDeadline = nil
     duck.deadline = os.clock() + DUCK_RETURN_TIMEOUT
     duck.returnMoved = false
 end
@@ -873,7 +760,8 @@ local function duckStep()
     local now = os.clock()
     local character, root = duckCharacter()
     if not character then
-        if duck.phase == "HOLD" or duck.phase == "WAIT_SPAWN" then
+        if duck.phase == "HOLD" or duck.phase == "WAIT_SPAWN"
+            or (duck.phase == "RETURN" and duck.spawnDeadline) then
             stopDuck("หยุด: ตัวละครไม่พร้อมระหว่างเสก\nตรวจว่าบอสเกิดแล้วหรือไม่ก่อนเปิดใหม่")
         else
             duck.visitedCharacter = nil
@@ -945,6 +833,13 @@ local function duckStep()
     local existing = findDuckBoss()
     if existing then attachDuckBoss(existing) return end
 
+    -- One 10-second window from returning to the summon point.
+    -- Waiting for the prompt, holding it, and waiting for spawn share this deadline.
+    if duck.spawnDeadline and now >= duck.spawnDeadline then
+        stopDuck("หยุด AUTO: กลับจุดเสกแล้วบอสไม่เกิดภายใน 10 วินาที\nกดเปิดใหม่เมื่อต้องการลองอีกครั้ง")
+        return
+    end
+
     if duck.phase == "SEEK" then
         beginDuckReturn()
     elseif duck.phase == "RETURN" then
@@ -954,8 +849,9 @@ local function duckStep()
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
             duck.returnMoved = true
+            duck.spawnDeadline = os.clock() + DUCK_SPAWN_TIMEOUT
             duck.settleAt = now + 1
-            duckStatus.Text = "กลับจุดเสกแล้ว กำลังรอปุ่ม E..."
+            duckStatus.Text = "กลับจุดเสกแล้ว เริ่มนับ 10 วินาที กำลังรอปุ่ม E..."
             return
         end
         if now < duck.settleAt then return end
@@ -964,19 +860,6 @@ local function duckStep()
             duckStatus.Text = "รอจุดเสก: " .. reason
             if now >= duck.deadline then stopDuck("หยุด: " .. reason) end
             return
-        end
-        readDuckInventory(true)
-        local missing = missingDuckItem()
-        if missing then
-            stopDuck("หยุด: Duck " .. missing .. " หมด (จำนวน 0)\nสำเร็จแล้ว " .. duck.fought .. " รอบ")
-            return
-        end
-        -- Let zero counts settle before treating them as authoritative.
-        for i = 1, 7 do
-            if duckCounts[i] == 0 then
-                duckStatus.Text = "กำลังยืนยันจำนวน Duck " .. i .. " ก่อนเสก..."
-                return
-            end
         end
         -- Arm state before beginning input, including zero-duration prompts.
         duck.phase = "HOLD"
@@ -993,15 +876,11 @@ local function duckStep()
         if now >= duck.deadline then
             endDuckHold()
             duck.phase = "WAIT_SPAWN"
-            duck.deadline = now + DUCK_SPAWN_TIMEOUT
         end
     elseif duck.phase == "WAIT_SPAWN" then
         duckStatus.Text = string.format(
             "กดเสกแล้ว รอตรวจพบบอสอีก %.0f วินาที\nหากไม่เกิด ระบบจะหยุด ไม่กดเสกซ้ำ",
-            math.max(0, duck.deadline - now))
-        if now >= duck.deadline then
-            stopDuck("หยุด: ไม่พบบอสหลังเสกใน 30 วินาที\nตรวจ Duck 1–7 ชื่อบอส และข้อความเกม\nจำนวน ? หมายถึงอ่านไอเทมไม่ได้")
-        end
+            math.max(0, duck.spawnDeadline - now))
     end
 end
 
@@ -1096,7 +975,6 @@ end
 
 local function update()
     local entries, total, root = collectTargets()
-    if currentPage == "duck" or duck.enabled then readDuckInventory(false) end
     local visible = {}
     local name = targets[selected].label
     pageTitle.Text = name
