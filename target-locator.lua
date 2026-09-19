@@ -1,4 +1,4 @@
--- Autokey v2.15 (Raid FULL AUTO: fixed wandering to far objects after adds): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.17 (Raid FULL AUTO: minions no longer mistaken as friendly): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -58,7 +58,7 @@ local skillInputMode = nil
 skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
     fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
-    hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false}
+    hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false, bbCache = {}, bbAt = -math.huge, bbVirtual = {}, warned = {}}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -138,7 +138,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.15 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.17 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -427,10 +427,16 @@ local raidWarpToggle = create("TextButton", {
     TextSize = 13, Text = "โหมดสู้: FULL AUTO เกาะเหนือหัวเป้าหมาย (กดเพื่อสลับ)",
 }, raidPage)
 local raidButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 280), Size = UDim2.new(1, 0, 0, 26),
+    Position = UDim2.fromOffset(0, 280), Size = UDim2.new(0.5, -3, 0, 26),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 14, Text = "เปิด + วาร์ปเข้าวง (1 ครั้ง ไม่สู้)",
+    TextSize = 12, Text = "เปิด + เข้าวง (1 ครั้ง ไม่สู้)",
+}, raidPage)
+local raidScanButton = create("TextButton", {
+    Position = UDim2.new(0.5, 3, 0, 280), Size = UDim2.new(0.5, -3, 0, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "สแกนรอบตัว (คัดลอก)",
 }, raidPage)
 local raidAutoButton = create("TextButton", {
     Position = UDim2.fromOffset(0, 310), Size = UDim2.new(1, 0, 0, 30),
@@ -1658,7 +1664,7 @@ local function raidStop(message)
     raid.hoverPart = nil
     endRaidHold()
     if releaseSkillKeys then releaseSkillKeys() end
-    raidButton.Text = "เปิด + วาร์ปเข้าวง (1 ครั้ง ไม่สู้)"
+    raidButton.Text = "เปิด + เข้าวง (1 ครั้ง ไม่สู้)"
     raidButton.BackgroundColor3 = colors.active
     raidAutoButton.Text = "RAID AUTO: OFF — กดเพื่อวนต่อเนื่อง"
     raidAutoButton.BackgroundColor3 = colors.blue
@@ -1754,9 +1760,9 @@ end
 
 -- ===== Raid combat helpers: ลูกบอล/ลูกน้อง (adds) ก่อน แล้วค่อยบอส โดยเกาะอยู่เหนือหัวเป้าหมายตลอด =====
 local RAID_ADD_HEIGHT = 10     -- ลอยเหนือลูกบอล/ลูกน้องกี่ studs (บอสตั้งค่าในช่องบนหน้าจอ)
-local RAID_ADD_RADIUS = 120    -- ลูกน้อง/ลูกบอลต้องอยู่ห่างจากบอสไม่เกินกี่ studs (กันไปเกาะของประดับฉากไกลๆ)
+local RAID_ADD_RADIUS = 220    -- ลูกน้อง/ลูกบอลต้องอยู่ห่างจากบอสไม่เกินกี่ studs (กันไปเกาะของประดับฉากไกลๆ)
 
--- กันไม่ให้ไปนับสัตว์เลี้ยง/Ally/ของเราเป็นศัตรู
+-- กันไม่ให้ไปนับ Ally/ของเราเป็นศัตรู (ลูกน้องที่บอสเรียกมีเจ้าของเป็นบอส จึงต้องไม่ถูกนับเป็นของเรา)
 local function isFriendlyModel(model)
     local playerName = normalizeDuck(player.Name)
     local displayName = normalizeDuck(player.DisplayName)
@@ -1764,17 +1770,95 @@ local function isFriendlyModel(model)
     while current and current ~= workspace do
         local name = normalizeDuck(current.Name)
         if name == playerName or name == displayName
-            or name:find("ally", 1, true) or name:find("summon", 1, true)
-            or name:find("companion", 1, true) then
+            or name:find("ally", 1, true) or name:find("companion", 1, true) then
             return true
         end
-        if current:GetAttribute("Owner") or current:GetAttribute("OwnerId")
-            or current:GetAttribute("OwnerUserId") then
+        -- เป็นของเราต่อเมื่อค่า Owner ชี้มาที่เรา (ไม่ใช่ Owner ของใครก็ได้)
+        for _, attribute in ipairs({"Owner", "OwnerId", "OwnerUserId", "OwnerName"}) do
+            local owner = current:GetAttribute(attribute)
+            if owner ~= nil and (owner == player.UserId or tostring(owner) == tostring(player.UserId)
+                or tostring(owner) == player.Name) then
+                return true
+            end
+        end
+        local ownerValue = current:FindFirstChild("Owner")
+        if ownerValue and ownerValue:IsA("ObjectValue") and ownerValue.Value == player then
             return true
         end
         current = current.Parent
     end
     return false
+end
+
+-- ลูกบอลบางแบบไม่มี Humanoid แต่มีแถบเลือดลอยเหนือหัว (BillboardGui ข้อความ "525000/525000")
+-- จึงอ่านเลือดจากแถบนั้นแทน เพื่อให้หาเจอและรู้ว่าตายหรือยัง
+local function parseHealthText(text)
+    local a, b = string.match(text or "", "^%s*([%d,%.]+)%s*/%s*([%d,%.]+)%s*$")
+    if not a then return nil end
+    local cur = tonumber((a:gsub(",", "")))
+    local max = tonumber((b:gsub(",", "")))
+    if cur and max and max > 0 then return cur, max end
+    return nil
+end
+
+local function scanBillboardHealth()
+    local found = {}
+    local function scan(container)
+        for _, bb in ipairs(container:GetDescendants()) do
+            if bb:IsA("BillboardGui") and not bb:IsDescendantOf(gui) then
+                local part = bb.Adornee
+                if not part then part = bb.Parent end
+                if part and part:IsA("Attachment") then part = part.Parent end
+                if part and part:IsA("Model") then part = getPart(part) end
+                if part and part:IsA("BasePart") and part:IsDescendantOf(workspace) then
+                    for _, label in ipairs(bb:GetDescendants()) do
+                        if label:IsA("TextLabel") and parseHealthText(label.Text) then
+                            table.insert(found, {label = label, part = part})
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    scan(workspace)
+    scan(playerGui)
+    return found
+end
+
+local function findBillboardAdds(root, boss)
+    local now = os.clock()
+    if now - (raid.bbAt or -math.huge) > 3 then
+        raid.bbAt = now
+        raid.bbCache = scanBillboardHealth()
+    end
+    local out = {}
+    for _, item in ipairs(raid.bbCache or {}) do
+        local label, part = item.label, item.part
+        if label.Parent and part.Parent then
+            local cur, max = parseHealthText(label.Text)
+            local model = part:FindFirstAncestorOfClass("Model")
+            if cur and cur > 0
+                and not (boss and part:IsDescendantOf(boss.model))
+                and not isPlayer(part) and not isFriendlyModel(part)
+                and not (model and model:FindFirstChildOfClass("Humanoid")) then
+                local virtual = raid.bbVirtual[label]
+                if not virtual then
+                    virtual = {Health = cur, MaxHealth = max, DisplayName = label.Text, virtual = true}
+                    raid.bbVirtual[label] = virtual
+                end
+                virtual.Health = cur
+                virtual.MaxHealth = max
+                if not (raid.ignore[virtual] and raid.ignore[virtual] > now) then
+                    table.insert(out, {
+                        model = model or part, humanoid = virtual, part = part,
+                        distance = (root.Position - part.Position).Magnitude,
+                    })
+                end
+            end
+        end
+    end
+    return out
 end
 
 -- ศัตรูอื่นที่ไม่ใช่บอส (ลูกบอลซ้าย/ขวา, ลูกน้องที่บอสเรียก) เรียงใกล้→ไกล
@@ -1786,16 +1870,26 @@ local function findRaidAdds(root, boss)
         if model and model:IsA("Model") and humanoid.Health > 0
             and humanoid:IsDescendantOf(workspace) and not isPlayer(model)
             and not (boss and model == boss.model)
-            and not (raid.ignore[humanoid] and raid.ignore[humanoid] > now)
-            and not isFriendlyModel(model) then
+            and not (raid.ignore[humanoid] and raid.ignore[humanoid] > now) then
             local part = getPart(model)
-            if part then
+            local friendly = part and isFriendlyModel(model)
+            if friendly and not raid.warned[model] then
+                raid.warned[model] = true
+                warn("Raid: ข้าม (ถูกมองว่าเป็นของฝ่ายเรา): " .. model:GetFullName())
+            end
+            if part and not friendly then
                 local d = (root.Position - part.Position).Magnitude
                 local center = boss and boss.part.Position or root.Position
                 if (center - part.Position).Magnitude <= RAID_ADD_RADIUS then
                     table.insert(adds, {model = model, humanoid = humanoid, part = part, distance = d})
                 end
             end
+        end
+    end
+    for _, entry in ipairs(findBillboardAdds(root, boss)) do
+        local center = boss and boss.part.Position or root.Position
+        if (center - entry.part.Position).Magnitude <= RAID_ADD_RADIUS then
+            table.insert(adds, entry)
         end
     end
     table.sort(adds, function(a, b) return a.distance < b.distance end)
@@ -1856,6 +1950,10 @@ local function raidRound(alive, pause, fight)
 
     raid.bossEntry = nil
     raid.ignore = {}
+    raid.bbCache = {}
+    raid.bbAt = -math.huge
+    raid.bbVirtual = {}
+    raid.warned = {}
     raid.hoverPart = nil
     -- รอตัวละครพร้อม (เผื่อเพิ่งเกิดใหม่/กลับจากด่าน)
     local character, root
@@ -2226,6 +2324,47 @@ raidBossName.FocusLost:Connect(function()
 end)
 raidButton.Activated:Connect(function() startRaid(false) end)
 raidAutoButton.Activated:Connect(function() startRaid(true) end)
+
+-- ปุ่มสแกน: รายงานสิ่งมีชีวิต/แถบเลือดรอบตัว คัดลอกลง Clipboard (ถ้าตัวรันรองรับ) และพิมพ์ลง Console
+raidScanButton.Activated:Connect(function()
+    local _, root = duckCharacter()
+    if not root then raidStatus.Text = "รอตัวละครพร้อมก่อนสแกน" return end
+    refreshTracked()
+    local lines = {"== Raid scan =="}
+    local rows = {}
+    for humanoid in pairs(tracked) do
+        local parent = humanoid.Parent
+        if parent and humanoid:IsDescendantOf(workspace) and not isPlayer(parent) then
+            local part = parent:IsA("BasePart") and parent or (parent:IsA("Model") and getPart(parent))
+            if part then
+                local d = (root.Position - part.Position).Magnitude
+                if d <= 400 then
+                    table.insert(rows, {d = d, text = string.format(
+                        "[Humanoid] %s (%s) HP %.0f/%.0f • %.0f studs • friendly=%s",
+                        parent:GetFullName(), humanoid.DisplayName, humanoid.Health, humanoid.MaxHealth, d,
+                        tostring(isFriendlyModel(parent)))})
+                end
+            end
+        end
+    end
+    table.sort(rows, function(a, b) return a.d < b.d end)
+    for i = 1, math.min(15, #rows) do table.insert(lines, rows[i].text) end
+    local bars = scanBillboardHealth()
+    for i = 1, math.min(15, #bars) do
+        local item = bars[i]
+        table.insert(lines, string.format("[HealthBar] \"%s\" on %s • %.0f studs",
+            item.label.Text, item.part:GetFullName(), (root.Position - item.part.Position).Magnitude))
+    end
+    local boss = findRaidBoss(root, true)
+    table.insert(lines, "[Boss] " .. (boss and boss.model:GetFullName() or "ไม่พบ"))
+    local report = table.concat(lines, "\n")
+    print(report)
+    local copied = false
+    local copyFunction = setclipboard or toclipboard
+    if copyFunction then copied = pcall(copyFunction, report) end
+    raidStatus.Text = string.format("สแกน: Humanoid %d • แถบเลือด %d • %s",
+        #rows, #bars, copied and "คัดลอกลง Clipboard แล้ว ส่งให้ผมได้" or "ดูผลใน Console (F9)")
+end)
 raidWarpToggle.Activated:Connect(function()
     raid.hover = not raid.hover
     raidWarpToggle.Text = raid.hover and "โหมดสู้: FULL AUTO เกาะเหนือหัวเป้าหมาย (กดเพื่อสลับ)"
