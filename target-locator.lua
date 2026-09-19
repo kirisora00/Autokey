@@ -1,4 +1,4 @@
--- Autokey v2.8 (Raid window auto-close): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.9 (Raid AUTO loop): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -56,6 +56,8 @@ local skills = {enabled = true, selected = {Z = true, X = true, C = true, V = tr
 local skillInput = nil
 local skillInputMode = nil
 skills.castTracks = {}
+local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
+    fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -135,7 +137,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.7 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.9 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -363,37 +365,67 @@ create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left,
 }, raidPage)
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 38), Size = UDim2.new(1, 0, 0, 52),
+    Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 0, 46),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
-    TextSize = 13, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+    TextSize = 12, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
     Text = "ตั้งค่าครั้งแรก: (1) ยืนข้างปุ่ม E Open Raid แล้วกดบันทึก (2) เปิด Raid ด้วยตัวเองให้วงวาร์ปขึ้น ยืนกลางวงแล้วกดบันทึก",
 }, raidPage)
 local bindRaidPrompt = create("TextButton", {
-    Position = UDim2.fromOffset(0, 96), Size = UDim2.new(1, 0, 0, 37),
+    Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 32),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 14, Text = "1) บันทึกจุดกด E (ยืนข้าง Open Raid)",
+    TextSize = 13, Text = "1) บันทึกจุดกด E (ยืนข้าง Open Raid)",
 }, raidPage)
 local bindRaidRing = create("TextButton", {
-    Position = UDim2.fromOffset(0, 140), Size = UDim2.new(1, 0, 0, 37),
+    Position = UDim2.fromOffset(0, 120), Size = UDim2.new(1, 0, 0, 32),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 14, Text = "2) บันทึกจุดกลางวงวาร์ป",
+    TextSize = 13, Text = "2) บันทึกจุดกลางวงวาร์ป",
+}, raidPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 158), Size = UDim2.fromOffset(117, 28),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "ชื่อบอส Raid:",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, raidPage)
+local raidBossName = create("TextBox", {
+    Position = UDim2.fromOffset(118, 158), Size = UDim2.new(1, -118, 0, 28),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "Bacon of Grudge", ClearTextOnFocus = false,
+}, raidPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 192), Size = UDim2.fromOffset(280, 28),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "จำนวนรอบสูงสุด (0 = จนกว่าของหมด)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, raidPage)
+local raidMax = create("TextBox", {
+    Position = UDim2.new(1, -97, 0, 192), Size = UDim2.fromOffset(97, 28),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "0", ClearTextOnFocus = false,
 }, raidPage)
 local raidButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 190), Size = UDim2.new(1, 0, 0, 43),
+    Position = UDim2.fromOffset(0, 226), Size = UDim2.new(1, 0, 0, 34),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 14, Text = "เปิด + วาร์ปเข้าวง (1 ครั้ง ไม่สู้)",
+}, raidPage)
+local raidAutoButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 266), Size = UDim2.new(1, 0, 0, 38),
     BackgroundColor3 = colors.blue, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 16, Text = "RAID: เปิด + วาร์ปเข้าวง — กดเริ่ม",
+    TextSize = 15, Text = "RAID AUTO: OFF — กดเพื่อวนต่อเนื่อง",
 }, raidPage)
 local raidStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 245), Size = UDim2.new(1, 0, 0, 125),
+    Position = UDim2.fromOffset(0, 310), Size = UDim2.new(1, 0, 0, 62),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
-    TextSize = 14, TextWrapped = true,
+    TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ยังไม่ได้บันทึกจุด\nลำดับ: วาร์ปไปจุดกด E → กดค้าง E → กดปุ่ม Open ในหน้า Raid Boss → รอวงเปิด → วาร์ปเข้าวง",
+    Text = "ยังไม่ได้บันทึกจุด\nAUTO: เปิด Raid → วาร์ปเข้าวง → สู้บอส → ปิดหน้า Victory → วนใหม่ • หยุดเมื่อบอสไม่เกิด (Portal Gun หมด)",
 }, raidPage)
 
 local function showPage(page)
@@ -884,8 +916,9 @@ local function useDuckSkill(character, root, boss)
         skillStatus.Text = "พักสกิลระหว่างพิมพ์ข้อความ"
         return
     end
-    if not duck.enabled or duck.phase ~= "FIGHT" or not duck.combatReady
-        or duck.deathSeen or boss.humanoid.Health <= 0 then return end
+    local inDuck = duck.enabled and duck.phase == "FIGHT" and duck.combatReady and not duck.deathSeen
+    local inRaid = raid.fighting and raid.combatReady
+    if not (inDuck or inRaid) or boss.humanoid.Health <= 0 then return end
     if os.clock() < skills.nextAt or next(skills.held) then return end
     if root.Anchored or actionAnimationPlaying(character) then
         skillStatus.Text = "รอสกิลก่อนหน้าจบ..."
@@ -904,6 +937,7 @@ local function useDuckSkill(character, root, boss)
         skillToggle.Text = "BOSS SKILLS: OFF"
         skillStatus.Text = "ตัวรันไม่รองรับการจำลองปุ่มสกิล"
         stopDuck("หยุด: ตัวรันไม่รองรับปุ่มสกิล ดูเมนู Skills")
+        if raid.stop then raid.stop("หยุด: ตัวรันไม่รองรับปุ่มสกิล") end
         return
     end
     watchSkillAnimations(character)
@@ -921,6 +955,7 @@ local function useDuckSkill(character, root, boss)
         skillToggle.BackgroundColor3 = colors.active
         skillStatus.Text = "ส่งปุ่มไม่สำเร็จ ปิดแชต/เมนู Roblox แล้วลองใหม่\nหากยังไม่ได้ ตัวรันอาจไม่รองรับ"
         stopDuck("หยุด: ส่งสกิลไม่สำเร็จ ดูเมนู Skills และ Console")
+        if raid.stop then raid.stop("หยุด: ส่งสกิลไม่สำเร็จ ดู Console") end
         warn("Autokey skill input:", err)
         return
     end
@@ -932,7 +967,10 @@ local function useDuckSkill(character, root, boss)
                 skills.held[key] = nil
             else
                 releaseSkillKeys()
-                if running then stopDuck("หยุด: ปล่อยปุ่มสกิลไม่สำเร็จ ปิดแชต/เมนู Roblox") end
+                if running then
+                    stopDuck("หยุด: ปล่อยปุ่มสกิลไม่สำเร็จ ปิดแชต/เมนู Roblox")
+                    if raid.stop then raid.stop("หยุด: ปล่อยปุ่มสกิลไม่สำเร็จ") end
+                end
                 warn("Autokey skill release:", releaseError)
             end
         end
@@ -965,7 +1003,7 @@ skillQuiet.FocusLost:Connect(function()
 end)
 skillsTab.Activated:Connect(function() showPage("skills") end)
 table.insert(flightConnections, UserInputService.InputBegan:Connect(function(input)
-    if duck.enabled and skills.selected[input.KeyCode.Name]
+    if (duck.enabled or raid.fighting) and skills.selected[input.KeyCode.Name]
         and not UserInputService:GetFocusedTextBox() then
         skills.lastCastAt = os.clock()
     end
@@ -1453,7 +1491,6 @@ end)
 
 -- ===== Raid opener: E (Open Raid) -> กดปุ่ม Open ในหน้า Raid Boss -> วาร์ปเข้าวง =====
 -- ไม่เรียก Remote เดาเอง: ใช้ ProximityPrompt และปุ่ม GUI จริงของเกมเท่านั้น
-local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0}
 
 local function guiVisible(obj)
     local current = obj
@@ -1581,12 +1618,332 @@ local function raidMoveTo(character, root, pose)
     root.AssemblyAngularVelocity = Vector3.zero
 end
 
+local function endRaidHold()
+    local prompt = raid.held
+    raid.held = nil
+    if prompt then pcall(function() prompt:InputHoldEnd() end) end
+end
+
 local function raidStop(message)
     raid.token += 1
     raid.running = false
-    raidButton.Text = "RAID: เปิด + วาร์ปเข้าวง — กดเริ่ม"
-    raidButton.BackgroundColor3 = colors.blue
+    raid.auto = false
+    raid.fighting = false
+    raid.combatReady = false
+    endRaidHold()
+    if releaseSkillKeys then releaseSkillKeys() end
+    raidButton.Text = "เปิด + วาร์ปเข้าวง (1 ครั้ง ไม่สู้)"
+    raidButton.BackgroundColor3 = colors.active
+    raidAutoButton.Text = "RAID AUTO: OFF — กดเพื่อวนต่อเนื่อง"
+    raidAutoButton.BackgroundColor3 = colors.blue
     if message then raidStatus.Text = message end
+end
+raid.stop = raidStop
+
+local function raidSay(text) raidStatus.Text = text end
+
+-- หาบอส Raid ตามชื่อ (ตรงบางส่วนก็ได้ เช่น "bacon of grudge")
+local function findRaidBoss(root)
+    local wanted = normalizeDuck(raidBossName.Text)
+    if wanted == "" then return nil end
+    local best, nearest = nil, math.huge
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
+            local modelName = normalizeDuck(model.Name)
+            local displayName = normalizeDuck(humanoid.DisplayName)
+            if modelName:find(wanted, 1, true) or displayName:find(wanted, 1, true) then
+                local part = getPart(model)
+                if part then
+                    local d = (root.Position - part.Position).Magnitude
+                    if d < nearest then
+                        nearest = d
+                        best = {model = model, humanoid = humanoid, part = part, distance = d}
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function findVictoryLabel()
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if label:IsA("TextLabel") and not label:IsDescendantOf(gui)
+            and normalizeDuck(label.Text) == "victory" and guiVisible(label) then
+            return label
+        end
+    end
+    return nil
+end
+
+-- หนึ่งรอบ: เปิด Raid -> เข้าวง -> (ถ้า fight) สู้บอส -> ปิดหน้า Victory
+-- คืนค่า "done" | "cancel" | "fail", ข้อความ
+local function raidRound(alive, pause, fight)
+    local function ready()
+        if flight or duck.enabled or auto then return false end
+        return true
+    end
+
+    -- รอตัวละครพร้อม (เผื่อเพิ่งเกิดใหม่/กลับจากด่าน)
+    local character, root
+    local deadline = os.clock() + 20
+    while alive() and os.clock() < deadline do
+        character, root = duckCharacter()
+        if character then break end
+        raidSay("รอตัวละครพร้อม...")
+        task.wait(0.5)
+    end
+    if not alive() then return "cancel" end
+    if not character then return "fail", "ตัวละครไม่พร้อมภายใน 20 วินาที หยุดระบบ Raid" end
+    if not ready() then return "fail", "หยุด Raid เพราะเปิดระบบอื่นอยู่" end
+
+    -- 1) วาร์ปไปจุดกด E แล้วหาปุ่ม (ปุ่มอาจถูกสร้างใหม่หลังจบรอบ)
+    raidSay("วาร์ปไปจุด Open Raid...")
+    raidMoveTo(character, root, raid.promptPose)
+    if not pause(0.8) then return "cancel" end
+    local prompt
+    deadline = os.clock() + 6
+    while alive() and os.clock() < deadline do
+        character, root = duckCharacter()
+        if not character then break end
+        prompt = findOpenRaidPrompt(root)
+        if prompt then break end
+        task.wait(0.3)
+    end
+    if not alive() then return "cancel" end
+    if not prompt then return "fail", "ไม่พบปุ่ม E: Open Raid ที่จุดที่บันทึก\nบันทึกจุดกด E ใหม่" end
+    raid.prompt = prompt
+
+    -- 2) กดค้าง E
+    raidSay("กดค้าง E: Open Raid...")
+    raid.held = prompt
+    prompt:InputHoldBegin()
+    if not pause(math.max(0, prompt.HoldDuration) + 0.25) then return "cancel" end
+    endRaidHold()
+
+    -- 3) รอหน้า Raid Boss แล้วกด Open
+    raidSay("รอหน้า Raid Boss ขึ้น...")
+    local button, windowLabel
+    deadline = os.clock() + 6
+    while alive() and os.clock() < deadline do
+        button, windowLabel = findRaidOpenButton()
+        if button then break end
+        task.wait(0.15)
+    end
+    if not alive() then return "cancel" end
+    if not button then return "fail", "ไม่พบหน้า Raid Boss หรือปุ่ม Open ภายใน 6 วินาที" end
+    raidSay("กดปุ่ม Open...")
+    if not pressGuiButton(button) then
+        return "fail", "กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ"
+    end
+
+    -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
+    if not pause(0.4) then return "cancel" end
+    for _ = 1, 3 do
+        if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
+        closeRaidWindow(windowLabel, pressGuiButton)
+        if not pause(0.3) then return "cancel" end
+    end
+
+    -- 4) รอวงเปิด แล้ววาร์ปเข้าวง
+    raidSay("รอวงวาร์ปเปิด...")
+    if not pause(1.0) then return "cancel" end
+    character, root = duckCharacter()
+    if not character then return "fail", "ตัวละครไม่พร้อมตอนเข้าวง" end
+    raidMoveTo(character, root, raid.ringPose)
+    raidSay("วาร์ปเข้าวงแล้ว...")
+    if not pause(1.2) then return "cancel" end
+    -- ถ้าโดนดันออกจากวงเล็กน้อย ให้วางกลับ (ถ้าถูกเกมย้ายไปไกลแล้วถือว่าเข้าด่านสำเร็จ)
+    character, root = duckCharacter()
+    if character then
+        local d = (root.Position - raid.ringPose.Position).Magnitude
+        if d > 6 and d < 40 then raidMoveTo(character, root, raid.ringPose) end
+    end
+    if not fight then return "done", "เปิด Raid และวาร์ปเข้าวงแล้ว" end
+
+    -- 5) รอบอสเกิด (ไม่เกิด = วาร์ปไม่สำเร็จ/Portal Gun หมด ให้หยุด)
+    local spawnDeadline = os.clock() + 35
+    local boss
+    while alive() and os.clock() < spawnDeadline do
+        character, root = duckCharacter()
+        if character then
+            boss = findRaidBoss(root)
+            if boss then break end
+        end
+        raidSay(string.format("รอบอสเกิด... เหลือ %.0f วินาที", math.max(0, spawnDeadline - os.clock())))
+        task.wait(0.4)
+    end
+    if not alive() then return "cancel" end
+    if not boss then
+        return "fail", "บอสไม่เกิดภายใน 35 วินาที\nอาจวาร์ปไม่สำเร็จหรือ Portal Gun หมด จึงปิด AUTO"
+    end
+
+    -- 6) สู้บอส: วาร์ปเข้าหา + ส่งสกิล (ใช้ปุ่ม/เวลาจากแท็บ Skills)
+    raid.fighting = true
+    raid.combatReady = false
+    skills.nextAt = 0
+    local fightDeadline = os.clock() + 1500
+    local missingSince, stableSince, victory
+    local lastWarp, nextVictory = 0, 0
+    while alive() do
+        if not ready() then
+            raid.fighting = false
+            releaseSkillKeys()
+            return "fail", "หยุด Raid เพราะเปิดระบบอื่นอยู่"
+        end
+        local now = os.clock()
+        if now > fightDeadline then
+            raid.fighting = false
+            releaseSkillKeys()
+            return "fail", "สู้บอสเกิน 25 นาที หยุดระบบ Raid"
+        end
+        if now >= nextVictory then
+            nextVictory = now + 1
+            victory = findVictoryLabel()
+            if victory then break end
+        end
+        character, root = duckCharacter()
+        if not character then
+            raid.combatReady = false
+            stableSince = nil
+            releaseSkillKeys()
+            raidSay("รอตัวละครเกิดใหม่...")
+            task.wait(0.5)
+            continue
+        end
+        boss = findRaidBoss(root)
+        if boss then
+            missingSince = nil
+            local distance = (root.Position - boss.part.Position).Magnitude
+            if distance > 35 then
+                raid.combatReady = false
+                stableSince = nil
+                releaseSkillKeys()
+                if now >= lastWarp and not root.Anchored then
+                    warp(boss)
+                    lastWarp = now + 2.5
+                    raidSay("วาร์ปเข้าหาบอส...")
+                end
+            elseif root.Anchored or root.AssemblyLinearVelocity.Magnitude > 25 then
+                raid.combatReady = false
+                stableSince = nil
+                raidSay("พักสกิล: รอให้ตัวนิ่งใกล้บอส...")
+            else
+                if not raid.combatReady then
+                    if actionAnimationPlaying(character) then
+                        stableSince = nil
+                    else
+                        stableSince = stableSince or now
+                        if now - stableSince >= 1 then raid.combatReady = true end
+                    end
+                end
+                if raid.combatReady then
+                    raidSay(string.format("สู้บอส: %s\nHP: %.0f • รอบที่ %d",
+                        boss.model.Name, boss.humanoid.Health, raid.rounds + 1))
+                    useDuckSkill(character, root, boss)
+                end
+            end
+        else
+            raid.combatReady = false
+            releaseSkillKeys()
+            missingSince = missingSince or now
+            raidSay("บอสหายไป รอหน้า Victory...")
+            if now - missingSince > 20 then break end
+        end
+        task.wait(0.25)
+    end
+    raid.fighting = false
+    raid.combatReady = false
+    releaseSkillKeys()
+    if not alive() then return "cancel" end
+
+    -- 7) หน้า Victory: กดปิด
+    if not victory then
+        raidSay("รอหน้า Victory...")
+        deadline = os.clock() + 10
+        while alive() and os.clock() < deadline do
+            victory = findVictoryLabel()
+            if victory then break end
+            task.wait(0.4)
+        end
+        if not alive() then return "cancel" end
+    end
+    if victory then
+        raidSay("ชนะแล้ว! กำลังปิดหน้า Victory...")
+        if not pause(0.8) then return "cancel" end
+        for _ = 1, 4 do
+            if not victory.Parent or not guiVisible(victory) then break end
+            closeRaidWindow(victory, pressGuiButton)
+            if not pause(0.5) then return "cancel" end
+        end
+    end
+    return "done", victory and "จบรอบ: ชนะและปิดหน้า Victory แล้ว" or "จบรอบ (ไม่พบหน้า Victory)"
+end
+
+local function startRaid(autoMode)
+    if raid.running then raidStop("หยุดระบบ Raid แล้ว") return end
+    if auto or flight or duck.enabled then
+        raidStatus.Text = "ปิด AUTO / Flight / Duck ก่อนใช้ระบบ Raid ครับ"
+        return
+    end
+    if not raid.promptPose or not raid.prompt then
+        raidStatus.Text = "กดบันทึกจุดกด E (ข้อ 1) ก่อนครับ"
+        return
+    end
+    if not raid.ringPose then
+        raidStatus.Text = "กดบันทึกจุดกลางวงวาร์ป (ข้อ 2) ก่อนครับ"
+        return
+    end
+    if autoMode and normalizeDuck(raidBossName.Text) == "" then
+        raidStatus.Text = "กรอกชื่อบอส Raid ก่อนครับ"
+        return
+    end
+
+    raid.token += 1
+    local token = raid.token
+    raid.running = true
+    raid.auto = autoMode
+    raid.rounds = 0
+    if autoMode then
+        raidAutoButton.Text = "RAID AUTO: ON — กดเพื่อหยุด"
+        raidAutoButton.BackgroundColor3 = colors.green
+    else
+        raidButton.Text = "กำลังทำงาน — กดเพื่อหยุด"
+        raidButton.BackgroundColor3 = colors.green
+    end
+
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local function alive() return running and raid.running and raid.token == token end
+            local function pause(seconds)
+                local untilTime = os.clock() + seconds
+                while alive() and os.clock() < untilTime do task.wait(0.1) end
+                return alive()
+            end
+            local maxRounds = math.max(0, math.floor(tonumber(raidMax.Text) or 0))
+            while alive() do
+                local result, message = raidRound(alive, pause, autoMode)
+                if result == "cancel" then return end
+                if result == "fail" then raidStop(message) return end
+                raid.rounds += 1
+                if not autoMode then raidStop(message) return end
+                if maxRounds > 0 and raid.rounds >= maxRounds then
+                    raidStop("ครบ " .. raid.rounds .. " รอบตามที่ตั้งไว้ ปิด AUTO แล้ว")
+                    return
+                end
+                raidSay("เสร็จ " .. raid.rounds .. " รอบ • เริ่มรอบถัดไปใน 3 วินาที")
+                if not pause(3) then return end
+            end
+        end)
+        endRaidHold()
+        if raid.token == token then releaseSkillKeys() end
+        if not ok then
+            raidStop("ระบบ Raid หยุดเพราะเกิด Error ดู Console")
+            warn("Raid Auto:", err)
+        end
+    end)
 end
 
 bindRaidPrompt.Activated:Connect(function()
@@ -1612,109 +1969,14 @@ bindRaidRing.Activated:Connect(function()
     raidStatus.Text = "บันทึกจุดกลางวงวาร์ปแล้ว"
 end)
 
-raidButton.Activated:Connect(function()
-    if raid.running then raidStop("หยุดระบบ Raid แล้ว") return end
-    if auto or flight or duck.enabled then
-        raidStatus.Text = "ปิด AUTO / Flight / Duck ก่อนใช้ระบบ Raid ครับ"
-        return
-    end
-    if not raid.prompt or not raid.prompt:IsDescendantOf(workspace) or not raid.promptPose then
-        raidStatus.Text = "กดบันทึกจุดกด E (ข้อ 1) ก่อนครับ"
-        return
-    end
-    if not raid.ringPose then
-        raidStatus.Text = "กดบันทึกจุดกลางวงวาร์ป (ข้อ 2) ก่อนครับ"
-        return
-    end
-
-    raid.token += 1
-    local token = raid.token
-    raid.running = true
-    raidButton.Text = "RAID: กำลังทำงาน — กดเพื่อหยุด"
-    raidButton.BackgroundColor3 = colors.green
-
-    task.spawn(function()
-        local held
-        local ok, err = pcall(function()
-            local function alive() return running and raid.running and raid.token == token end
-            local function pause(seconds)
-                local untilTime = os.clock() + seconds
-                while alive() and os.clock() < untilTime do task.wait(0.1) end
-                return alive()
-            end
-
-            -- 1) วาร์ปไปจุดกด E
-            local character, root = duckCharacter()
-            if not character then raidStop("ตัวละครไม่พร้อม หยุดระบบ Raid") return end
-            raidStatus.Text = "วาร์ปไปจุด Open Raid..."
-            raidMoveTo(character, root, raid.promptPose)
-            if not pause(0.7) then return end
-
-            -- 2) กดค้าง E
-            character, root = duckCharacter()
-            if not character then raidStop("ตัวละครไม่พร้อม หยุดระบบ Raid") return end
-            local promptPosition = duckPromptPosition(raid.prompt)
-            if not promptPosition or (root.Position - promptPosition).Magnitude > raid.prompt.MaxActivationDistance then
-                raidStop("อยู่นอกระยะกด E หรือปุ่มหาย\nบันทึกจุดกด E ใหม่")
-                return
-            end
-            raidStatus.Text = "กดค้าง E: Open Raid..."
-            held = raid.prompt
-            held:InputHoldBegin()
-            if not pause(math.max(0, held.HoldDuration) + 0.25) then return end
-            pcall(function() held:InputHoldEnd() end)
-            held = nil
-
-            -- 3) รอหน้า Raid Boss แล้วกดปุ่ม Open
-            raidStatus.Text = "รอหน้า Raid Boss ขึ้น..."
-            local button, windowLabel
-            local deadline = os.clock() + 6
-            while alive() and os.clock() < deadline do
-                button, windowLabel = findRaidOpenButton()
-                if button then break end
-                task.wait(0.15)
-            end
-            if not alive() then return end
-            if not button then
-                raidStop("ไม่พบหน้า Raid Boss หรือปุ่ม Open ภายใน 6 วินาที\nกด E เองแล้วส่งภาพให้ดูโครงสร้าง")
-                return
-            end
-            raidStatus.Text = "กดปุ่ม Open..."
-            if not pressGuiButton(button) then
-                raidStop("กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ\nลองกด Open เองแล้วใช้วาร์ปเข้าวงต่อ")
-                return
-            end
-
-            -- 4) รอวงเปิด แล้ววาร์ปเข้าวง
-            -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
-            if not pause(0.4) then return end
-            raidStatus.Text = "ปิดหน้าต่าง Raid Boss..."
-            for _ = 1, 3 do
-                if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
-                closeRaidWindow(windowLabel, pressGuiButton)
-                if not pause(0.3) then return end
-            end
-            raidStatus.Text = "รอวงวาร์ปเปิด..."
-            if not pause(1.0) then return end
-            character, root = duckCharacter()
-            if not character then raidStop("ตัวละครไม่พร้อม หยุดระบบ Raid") return end
-            raidMoveTo(character, root, raid.ringPose)
-            raidStatus.Text = "วาร์ปเข้าวงแล้ว รอตรวจตำแหน่ง..."
-            if not pause(1.2) then return end
-            -- ถ้าโดนดันออกจากวง ให้วางกลับอีกครั้ง
-            character, root = duckCharacter()
-            if character and (root.Position - raid.ringPose.Position).Magnitude > 6 then
-                raidMoveTo(character, root, raid.ringPose)
-            end
-            raidStop("เสร็จแล้ว: เปิด Raid และวาร์ปเข้าวงแล้ว\nกดเริ่มอีกครั้งเมื่อต้องการเปิดรอบใหม่")
-        end)
-        if held then pcall(function() held:InputHoldEnd() end) end
-        if not ok then
-            raidStop("ระบบ Raid หยุดเพราะเกิด Error ดู Console")
-            warn("Raid Auto:", err)
-        end
-    end)
+raidMax.FocusLost:Connect(function()
+    raidMax.Text = tostring(math.max(0, math.floor(tonumber(raidMax.Text) or 0)))
 end)
+raidBossName.FocusLost:Connect(function()
+    if raid.running then raidStop("แก้ชื่อบอสแล้ว กดเริ่มใหม่เพื่อใช้ชื่อใหม่") end
+end)
+raidButton.Activated:Connect(function() startRaid(false) end)
+raidAutoButton.Activated:Connect(function() startRaid(true) end)
 raidTab.Activated:Connect(function() showPage("raid") end)
 
 local function autoStep(entries)
