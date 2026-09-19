@@ -1,4 +1,4 @@
--- Autokey v2.12 (Raid FULL AUTO: orbs/adds first, hover above target): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.13 (Raid FULL AUTO: hover above the top of the target model): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -58,7 +58,7 @@ local skillInputMode = nil
 skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
     fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
-    hover = true, bossEntry = nil, hoverPart = nil, ignore = {}}
+    hover = true, bossEntry = nil, hoverPart = nil, hoverModel = nil, ignore = {}}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -138,7 +138,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.12 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.13 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -1741,7 +1741,8 @@ local function findRaidBoss(root, allowFallback)
 end
 
 -- ===== Raid combat helpers: ลูกบอล/ลูกน้อง (adds) ก่อน แล้วค่อยบอส โดยเกาะอยู่เหนือหัวเป้าหมายตลอด =====
-local RAID_HOVER_HEIGHT = 10   -- ลอยสูงเหนือหัวเป้าหมายกี่ studs (ปรับได้)
+local RAID_HOVER_HEIGHT = 10   -- ลอยสูงจากจุดกลางตัวเป้าหมายอย่างน้อยกี่ studs (ขั้นต่ำ)
+local RAID_HOVER_MARGIN = 14   -- ลอยสูงเหนือ "จุดสูงสุดของโมเดล" กี่ studs (บอสตัวใหญ่ ปรับเพิ่ม/ลดได้)
 local RAID_ADD_RADIUS = 250    -- ระยะสแกนหาลูกน้อง/ลูกบอลรอบตัว
 
 -- กันไม่ให้ไปนับสัตว์เลี้ยง/Ally/ของเราเป็นศัตรู
@@ -1815,7 +1816,16 @@ table.insert(flightConnections, RunService.Heartbeat:Connect(function()
     if not part.Parent then return end
     local character, root = duckCharacter()
     if not character then return end
-    local target = part.Position + Vector3.new(0, RAID_HOVER_HEIGHT, 0)
+    -- คำนวณความสูงจากกรอบของโมเดลทั้งตัว จึงอยู่เหนือหัวบอสตัวใหญ่ได้พอดี
+    local top
+    local model = raid.hoverModel
+    if model and model.Parent then
+        local ok, boxCFrame, boxSize = pcall(function() return model:GetBoundingBox() end)
+        if ok then top = boxCFrame.Position.Y + boxSize.Y / 2 end
+    end
+    top = top or (part.Position.Y + part.Size.Y / 2)
+    local height = math.max(part.Position.Y + RAID_HOVER_HEIGHT, top + RAID_HOVER_MARGIN)
+    local target = Vector3.new(part.Position.X, height, part.Position.Z)
     root.CFrame = CFrame.new(target) * root.CFrame.Rotation
     root.AssemblyLinearVelocity = Vector3.zero
     root.AssemblyAngularVelocity = Vector3.zero
@@ -2056,6 +2066,7 @@ local function raidRound(alive, pause, fight)
                     bossStale.hp = nil
                 end
                 raid.hoverPart = hoverPart
+                raid.hoverModel = (hoverPart == target.part) and target.model or nil
                 readySince = readySince or now
                 if now - readySince >= 0.6 then raid.combatReady = true end
             else
