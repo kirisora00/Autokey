@@ -1,4 +1,4 @@
--- Autokey v2.17 (Raid FULL AUTO: minions no longer mistaken as friendly): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.18 (Raid: auto-equip weapon tool): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -138,7 +138,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.17 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.18 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -366,11 +366,17 @@ create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left,
 }, raidPage)
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 0, 46),
+    Position = UDim2.fromOffset(0, 42), Size = UDim2.fromOffset(150, 30),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
-    TextSize = 12, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-    TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ตั้งค่าครั้งแรก: (1) ยืนข้างปุ่ม E Open Raid แล้วกดบันทึก (2) เปิด Raid ด้วยตัวเองให้วงวาร์ปขึ้น ยืนกลางวงแล้วกดบันทึก",
+    TextSize = 13, Text = "อาวุธที่ถือ (ชื่อบนแถบ):",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, raidPage)
+local raidWeapon = create("TextBox", {
+    Position = UDim2.fromOffset(152, 42), Size = UDim2.new(1, -152, 0, 30),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 15,
+    Text = "CidBeta", ClearTextOnFocus = false,
+    PlaceholderText = "ว่าง = ไม่เปลี่ยนอาวุธ",
 }, raidPage)
 local bindRaidPrompt = create("TextButton", {
     Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 32),
@@ -1940,6 +1946,30 @@ local function findVictoryLabel()
     return nil
 end
 
+-- ถืออาวุธ (Tool ในกระเป๋า/แถบด้านล่าง) ตามชื่อที่ตั้งไว้ ถ้ายังไม่ได้ถือ; เว้นช่องว่างเพื่อปิด
+local function equipRaidWeapon(character)
+    local wanted = normalizeDuck(raidWeapon.Text)
+    if wanted == "" then return end
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    local function matches(tool)
+        local name = normalizeDuck(tool.Name)
+        local tip = normalizeDuck(tool.ToolTip)
+        return name == wanted or tip == wanted or name:find(wanted, 1, true) ~= nil
+    end
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool") and matches(child) then return end -- ถืออยู่แล้ว
+    end
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    if not backpack then return end
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") and matches(tool) then
+            pcall(function() humanoid:EquipTool(tool) end)
+            return
+        end
+    end
+end
+
 -- หนึ่งรอบ: เปิด Raid -> เข้าวง -> (ถ้า fight) สู้บอส -> ปิดหน้า Victory
 -- คืนค่า "done" | "cancel" | "fail", ข้อความ
 local function raidRound(alive, pause, fight)
@@ -2043,6 +2073,7 @@ local function raidRound(alive, pause, fight)
                 nextRefresh = os.clock() + 2
                 refreshTracked()
             end
+            equipRaidWeapon(character)
             boss = findRaidBoss(root, true)
             if boss then break end
         end
@@ -2065,7 +2096,7 @@ local function raidRound(alive, pause, fight)
     skills.nextAt = 0
     local fightDeadline = os.clock() + 1500
     local missingSince, victory, readySince
-    local nextVictory, nextRefresh = 0, 0
+    local nextVictory, nextRefresh, nextEquip = 0, 0, 0
     local track = {humanoid = nil, hp = 0, since = 0}
     local bossStale = {hp = nil, since = 0}
     local orbCache, orbCacheAt = {}, -math.huge
@@ -2103,6 +2134,10 @@ local function raidRound(alive, pause, fight)
         if now >= nextRefresh then
             nextRefresh = now + 5
             refreshTracked()
+        end
+        if now >= nextEquip then
+            nextEquip = now + 1
+            equipRaidWeapon(character)
         end
 
         local boss = findRaidBoss(root, true)
