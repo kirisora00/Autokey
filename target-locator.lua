@@ -1,4 +1,4 @@
--- Autokey v2.26 (Dungeon: Auto Skip single-toggle safe click + test button): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.27 (Dungeon: Auto Skip button found via WaveUI.AutoSkip, click offset fix): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -140,7 +140,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.26 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.27 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -1803,9 +1803,6 @@ local function pressGuiButton(btn, real)
     local okInput, manager = pcall(function() return game:GetService("VirtualInputManager") end)
     if okInput and manager then
         local inset = game:GetService("GuiService"):GetGuiInset()
-        -- ScreenGui ที่ IgnoreGuiInset = พิกัดเริ่มที่มุมจอจริง ไม่ต้องบวกแถบบน
-        local screenGui = btn:FindFirstAncestorWhichIsA("ScreenGui")
-        if screenGui and screenGui.IgnoreGuiInset then inset = Vector2.zero end
         local center = btn.AbsolutePosition + btn.AbsoluteSize / 2 + inset
         local sent = pcall(function()
             pcall(function() manager:SendMouseMoveEvent(center.X, center.Y, game) end)
@@ -2819,15 +2816,20 @@ local function toggleAutoSkip(label, pause)
         seen[obj] = true
         table.insert(candidates, {obj = obj, score = d + (isButton and 0 or 70)})
     end
-    local scope = label
+    -- ปุ่มจริงของเกมชื่อ AutoSkip (WaveUI.AutoSkip) อยู่ ScreenGui เดียวกับป้าย: ให้ความสำคัญสูงสุด
+    local scope = label.Parent
     for _ = 1, 4 do
-        scope = scope.Parent
-        if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+        if not scope or scope == playerGui then break end
         for _, obj in ipairs(scope:GetDescendants()) do
-            if obj:IsA("GuiButton") then consider(obj, true)
+            if obj:IsA("GuiButton") then
+                consider(obj, true)
             elseif obj:IsA("Frame") or obj:IsA("ImageLabel") then consider(obj, false) end
         end
-        if #candidates > 0 then break end
+        if #candidates > 0 or scope:IsA("ScreenGui") then break end
+        scope = scope.Parent
+    end
+    for _, item in ipairs(candidates) do
+        if normalizeDuck(item.obj.Name):find("autoskip", 1, true) then item.score = item.score - 5000 end
     end
     if label:IsA("GuiButton") then
         table.insert(candidates, {obj = label, score = 1000})
