@@ -1,4 +1,4 @@
--- Autokey v2.4: sidebar, flight, targets, and cancellable Duck Boss summon loop
+-- Autokey v2.5: sidebar, flight, targets, continuous follow for moving targets (Devil Boat), and cancellable Duck Boss summon loop
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -19,10 +19,12 @@ local function create(class, props, parent)
     return obj
 end
 
+-- follow = true: เป้าหมายที่เคลื่อนที่ตลอดเวลา ระบบ AUTO จะวาร์ปตามต่อเนื่องจนกว่าจะตาย/หายไป
 local targets = {
-    {label = "Villain", model = "Bacon Thief"},
-    {label = "Devil Boat", model = "DevilBoat"},
+    {label = "Villain", model = "Bacon Thief", follow = false},
+    {label = "Devil Boat", model = "DevilBoat", follow = true},
 }
+local FOLLOW_DISTANCE = 9 -- ห่างจากเป้าหมายเกินกี่ studs ถึงจะวาร์ปตามใหม่
 local selected = 2
 local running = true
 local collapsed = false
@@ -133,7 +135,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 310), Size = UDim2.fromOffset(137, 65),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.4 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.5 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -1383,6 +1385,7 @@ local function autoStep(entries)
     if not auto then return end
 
     -- Removal from the client Workspace also counts as a departed target.
+    -- เป้าหมายที่ล็อกไว้จะไม่เปลี่ยน จนกว่าจะตายหรือหายไปจาก Workspace
     if locked and not isAlive(locked) then
         locked = nil
         visitedCharacter = nil
@@ -1409,6 +1412,7 @@ local function autoStep(entries)
     end
 
     -- Warp once per target, or return to it after the player respawns.
+    -- (สำหรับเป้าหมายที่เคลื่อนที่ การวาร์ปตามต่อเนื่องทำโดย Heartbeat ด้านล่าง)
     if visitedCharacter ~= character then
         local success, message, warpedCharacter = warp(locked)
         if success then
@@ -1422,12 +1426,37 @@ local function autoStep(entries)
 
     local marker = markers[locked.model]
     status.Text = string.format(
-        "AUTO: รอจัดการ %s%s | HP: %.0f",
+        "AUTO: %s %s%s | HP: %.0f",
+        targets[selected].follow and "ตามติด" or "รอจัดการ",
         targets[selected].label,
         marker and (" #" .. marker.id) or "",
         locked.humanoid.Health
     )
 end
+
+-- ระบบตามต่อเนื่อง: เป้าหมายที่เคลื่อนที่ (เช่น Devil Boat) จะถูกวาร์ปตามทุกเฟรม
+-- เมื่อห่างเกิน FOLLOW_DISTANCE และล็อกเป้าเดิมไว้จนกว่าจะตาย/หายไป จึงค่อยเปลี่ยนไปตัวใหม่
+table.insert(flightConnections, RunService.Heartbeat:Connect(function()
+    if not running or not auto or not locked then return end
+    if not targets[selected].follow then return end
+    if flight or duck.enabled then return end
+    if os.clock() < nextWarpAt then return end
+
+    local character = player.Character
+    -- ต้องให้ autoStep วาร์ปครั้งแรกเสร็จก่อน (และวาร์ปใหม่หลังเกิดใหม่)
+    if not character or visitedCharacter ~= character then return end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not root or humanoid.Health <= 0 or humanoid.SeatPart then return end
+    if not isAlive(locked) then return end
+
+    local part = getPart(locked.model)
+    if not part then return end
+    if (root.Position - part.Position).Magnitude <= FOLLOW_DISTANCE then return end
+
+    pcall(warp, locked)
+end))
 
 local function update()
     local entries, total, root = collectTargets()
