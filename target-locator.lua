@@ -1,4 +1,4 @@
--- Autokey v2.9 (Raid AUTO loop): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.10 (Raid boss detection fix): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -137,7 +137,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.9 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.10 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -1642,29 +1642,87 @@ raid.stop = raidStop
 
 local function raidSay(text) raidStatus.Text = text end
 
--- หาบอส Raid ตามชื่อ (ตรงบางส่วนก็ได้ เช่น "bacon of grudge")
-local function findRaidBoss(root)
-    local wanted = normalizeDuck(raidBossName.Text)
-    if wanted == "" then return nil end
-    local best, nearest = nil, math.huge
+-- หาบอส Raid: 1) ชื่อตรง/มีคำครบทุกคำ 2) ถ้าไม่พบ ใช้ตัวที่ HP สูงสุดในระยะ 250 studs (เฉพาะช่วงสู้)
+local function refreshTracked()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Humanoid") then tracked[obj] = true end
+    end
+end
+
+local function describeNearbyHumanoids(root)
+    local rows = {}
     for humanoid in pairs(tracked) do
         local model = humanoid.Parent
         if model and model:IsA("Model") and humanoid.Health > 0
             and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
-            local modelName = normalizeDuck(model.Name)
-            local displayName = normalizeDuck(humanoid.DisplayName)
-            if modelName:find(wanted, 1, true) or displayName:find(wanted, 1, true) then
-                local part = getPart(model)
-                if part then
-                    local d = (root.Position - part.Position).Magnitude
+            local part = getPart(model)
+            if part then
+                table.insert(rows, {
+                    d = (root.Position - part.Position).Magnitude,
+                    text = string.format("%s (%s) HP %.0f/%.0f", model.Name, humanoid.DisplayName,
+                        humanoid.Health, humanoid.MaxHealth),
+                })
+            end
+        end
+    end
+    table.sort(rows, function(a, b) return a.d < b.d end)
+    local lines = {}
+    for i = 1, math.min(5, #rows) do
+        table.insert(lines, string.format("%.0f studs: %s", rows[i].d, rows[i].text))
+    end
+    return #lines > 0 and table.concat(lines, "\n") or "ไม่พบ Humanoid ใกล้ตัวเลย"
+end
+
+local function findRaidBoss(root, allowFallback)
+    local cached = raid.bossEntry
+    if cached and isAlive(cached) then
+        local part = getPart(cached.model)
+        if part then
+            cached.part = part
+            cached.distance = (root.Position - part.Position).Magnitude
+            return cached
+        end
+    end
+    raid.bossEntry = nil
+
+    local wanted = normalizeDuck(raidBossName.Text)
+    local tokens = {}
+    for word in string.gmatch(string.lower(raidBossName.Text), "%w+") do
+        if #word >= 3 and word ~= "boss" then table.insert(tokens, word) end
+    end
+    local function nameMatches(text)
+        if wanted ~= "" and text:find(wanted, 1, true) then return true end
+        if #tokens == 0 then return false end
+        for _, word in ipairs(tokens) do
+            if not text:find(word, 1, true) then return false end
+        end
+        return true
+    end
+
+    local best, nearest = nil, math.huge
+    local strongest, strongestHealth = nil, 0
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
+            local part = getPart(model)
+            if part then
+                local d = (root.Position - part.Position).Magnitude
+                if nameMatches(normalizeDuck(model.Name)) or nameMatches(normalizeDuck(humanoid.DisplayName)) then
                     if d < nearest then
                         nearest = d
                         best = {model = model, humanoid = humanoid, part = part, distance = d}
                     end
+                elseif allowFallback and d <= 250 and humanoid.MaxHealth >= 50000
+                    and humanoid.MaxHealth > strongestHealth then
+                    strongestHealth = humanoid.MaxHealth
+                    strongest = {model = model, humanoid = humanoid, part = part, distance = d}
                 end
             end
         end
     end
+    best = best or strongest
+    raid.bossEntry = best
     return best
 end
 
@@ -1686,6 +1744,7 @@ local function raidRound(alive, pause, fight)
         return true
     end
 
+    raid.bossEntry = nil
     -- รอตัวละครพร้อม (เผื่อเพิ่งเกิดใหม่/กลับจากด่าน)
     local character, root
     local deadline = os.clock() + 20
@@ -1766,10 +1825,15 @@ local function raidRound(alive, pause, fight)
     -- 5) รอบอสเกิด (ไม่เกิด = วาร์ปไม่สำเร็จ/Portal Gun หมด ให้หยุด)
     local spawnDeadline = os.clock() + 35
     local boss
+    local nextRefresh = 0
     while alive() and os.clock() < spawnDeadline do
         character, root = duckCharacter()
         if character then
-            boss = findRaidBoss(root)
+            if os.clock() >= nextRefresh then
+                nextRefresh = os.clock() + 2
+                refreshTracked()
+            end
+            boss = findRaidBoss(root, true)
             if boss then break end
         end
         raidSay(string.format("รอบอสเกิด... เหลือ %.0f วินาที", math.max(0, spawnDeadline - os.clock())))
@@ -1777,7 +1841,11 @@ local function raidRound(alive, pause, fight)
     end
     if not alive() then return "cancel" end
     if not boss then
-        return "fail", "บอสไม่เกิดภายใน 35 วินาที\nอาจวาร์ปไม่สำเร็จหรือ Portal Gun หมด จึงปิด AUTO"
+        local nearby = ""
+        local _, nowRoot = duckCharacter()
+        if nowRoot then nearby = "\nตัวที่อยู่ใกล้:\n" .. describeNearbyHumanoids(nowRoot) end
+        warn("Raid: ไม่พบบอส" .. nearby)
+        return "fail", "ไม่พบบอสตามชื่อ \"" .. raidBossName.Text .. "\" ภายใน 35 วินาที (Portal Gun หมด/วาร์ปไม่สำเร็จ/ชื่อบอสไม่ตรง)" .. nearby
     end
 
     -- 6) สู้บอส: วาร์ปเข้าหา + ส่งสกิล (ใช้ปุ่ม/เวลาจากแท็บ Skills)
@@ -1813,7 +1881,7 @@ local function raidRound(alive, pause, fight)
             task.wait(0.5)
             continue
         end
-        boss = findRaidBoss(root)
+        boss = findRaidBoss(root, true)
         if boss then
             missingSince = nil
             local distance = (root.Position - boss.part.Position).Magnitude
