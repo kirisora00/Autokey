@@ -1,4 +1,4 @@
--- Autokey v2.7: sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.8 (Raid window auto-close): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -1490,12 +1490,40 @@ local function findRaidOpenButton()
                         end
                     end
                 end
-                if best then return best end
+                if best then return best, label end
                 scope = scope.Parent
             end
         end
     end
     return nil
+end
+
+-- ปิดหน้าต่าง Raid Boss หลังกด Open: กดปุ่ม X ของหน้าต่างนั้น ถ้าไม่พบจะซ่อนกรอบหน้าต่างแทน
+local function closeRaidWindow(label, press)
+    if not label or not label.Parent then return true end
+    local scope = label.Parent
+    for _ = 1, 8 do
+        if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("GuiButton") and guiVisible(obj)
+                and normalizeDuck(buttonText(obj)) == "x" then
+                if press(obj) then return true end
+            end
+        end
+        scope = scope.Parent
+    end
+    -- สำรอง: ซ่อนกรอบหน้าต่าง (ขนาดพอดีหน้าต่าง ไม่ใช่ทั้งจอ)
+    local frame = label.Parent
+    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    while frame and frame ~= playerGui and not frame:IsA("ScreenGui") do
+        if frame:IsA("GuiObject") and frame.AbsoluteSize.X >= 300 and frame.AbsoluteSize.Y >= 200
+            and frame.AbsoluteSize.X < viewport.X * 0.8 and frame.AbsoluteSize.Y < viewport.Y * 0.9 then
+            frame.Visible = false
+            return true
+        end
+        frame = frame.Parent
+    end
+    return false
 end
 
 local function pressGuiButton(btn)
@@ -1639,10 +1667,10 @@ raidButton.Activated:Connect(function()
 
             -- 3) รอหน้า Raid Boss แล้วกดปุ่ม Open
             raidStatus.Text = "รอหน้า Raid Boss ขึ้น..."
-            local button
+            local button, windowLabel
             local deadline = os.clock() + 6
             while alive() and os.clock() < deadline do
-                button = findRaidOpenButton()
+                button, windowLabel = findRaidOpenButton()
                 if button then break end
                 task.wait(0.15)
             end
@@ -1658,8 +1686,16 @@ raidButton.Activated:Connect(function()
             end
 
             -- 4) รอวงเปิด แล้ววาร์ปเข้าวง
+            -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
+            if not pause(0.4) then return end
+            raidStatus.Text = "ปิดหน้าต่าง Raid Boss..."
+            for _ = 1, 3 do
+                if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
+                closeRaidWindow(windowLabel, pressGuiButton)
+                if not pause(0.3) then return end
+            end
             raidStatus.Text = "รอวงวาร์ปเปิด..."
-            if not pause(1.5) then return end
+            if not pause(1.0) then return end
             character, root = duckCharacter()
             if not character then raidStop("ตัวละครไม่พร้อม หยุดระบบ Raid") return end
             raidMoveTo(character, root, raid.ringPose)
