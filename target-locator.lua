@@ -1,4 +1,4 @@
--- Autokey v2.24 (Dungeon: safe window close, GUI repair, Auto Skip click): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.25 (Dungeon: Auto Skip multi-method click + diagnostics): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -140,7 +140,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.24 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.25 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -2806,7 +2806,7 @@ local function toggleAutoSkip(label, pause)
     local seen = {}
     local function consider(obj, isButton)
         if seen[obj] or obj == label or not obj:IsA("GuiObject") or not guiVisible(obj) then return end
-        if label:IsDescendantOf(obj) then return end
+        if label:IsDescendantOf(obj) or obj:IsDescendantOf(label) then return end
         if obj.AbsoluteSize.X < 6 or obj.AbsoluteSize.X > 140 or obj.AbsoluteSize.Y > 140 then return end
         local d = (obj.AbsolutePosition + obj.AbsoluteSize / 2 - center).Magnitude
         if d > 260 then return end
@@ -2827,14 +2827,50 @@ local function toggleAutoSkip(label, pause)
         table.insert(candidates, {obj = label, score = 1000})
     end
     table.sort(candidates, function(a, b) return a.score < b.score end)
-    for i = 1, math.min(3, #candidates) do
-        local obj = candidates[i].obj
-        for _, real in ipairs({false, true}) do
-            pressGuiButton(obj, real)
-            if not pause(0.6) then return false end
-            if isOn() then return true end
-        end
+    local function fakeInput(obj, state)
+        return {
+            UserInputType = Enum.UserInputType.MouseButton1, UserInputState = state,
+            KeyCode = Enum.KeyCode.Unknown,
+            Position = Vector3.new(obj.AbsolutePosition.X + obj.AbsoluteSize.X / 2,
+                obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2, 0),
+            Delta = Vector3.zero,
+        }
     end
+    local methods = {
+        function(obj) if obj:IsA("GuiButton") then pressGuiButton(obj, false) end end,
+        function(obj)
+            if typeof(firesignal) ~= "function" or not obj:IsA("GuiButton") then return end
+            for _, name in ipairs({"MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up"}) do
+                pcall(function() firesignal(obj[name]) end)
+            end
+        end,
+        function(obj)
+            if typeof(getconnections) ~= "function" then return end
+            for _, pair in ipairs({{"InputBegan", Enum.UserInputState.Begin}, {"InputEnded", Enum.UserInputState.End}}) do
+                pcall(function()
+                    for _, connection in ipairs(getconnections(obj[pair[1]])) do
+                        connection:Fire(fakeInput(obj, pair[2]), false)
+                    end
+                end)
+            end
+        end,
+        function(obj) pressGuiButton(obj, true) end,
+    }
+    local log = {}
+    for i = 1, math.min(6, #candidates) do
+        local obj = candidates[i].obj
+        for m, method in ipairs(methods) do
+            pcall(method, obj)
+            if not pause(0.5) then return false end
+            if isOn() then
+                warn(string.format("Dungeon: เปิด Auto Skip สำเร็จด้วย %s (ตัวที่ %d) วิธี %d", obj:GetFullName(), i, m))
+                return true
+            end
+        end
+        table.insert(log, string.format("%s %s %dx%d", obj.ClassName, obj.Name, obj.AbsoluteSize.X, obj.AbsoluteSize.Y))
+    end
+    warn("Dungeon: กด Auto Skip ไม่ติด ลองแล้ว: " .. (#log > 0 and table.concat(log, " | ") or "ไม่พบปุ่ม/กรอบใกล้ป้าย"))
+    dungeon.skipLog = #log > 0 and table.concat(log, "\n") or "ไม่พบปุ่ม/กรอบใกล้ป้าย Auto Skip"
     return isOn()
 end
 
@@ -3097,6 +3133,7 @@ local function dungeonRound(alive, pause, fight)
     if not toggleAutoSkip(skipLabel, pause) then
         if not alive() then return "cancel" end
         warn("Dungeon: เปิด Auto Skip ไม่สำเร็จ (ป้ายไม่เป็น [1/1]) จะลองใหม่ระหว่างสู้")
+        dungeonSay("เปิด Auto Skip ไม่สำเร็จ ลองแล้ว:\n" .. tostring(dungeon.skipLog or "-") .. "\nกดสแกนหน้าจอ GUI แล้วส่งให้ผม")
     end
     local lastClick = os.clock()
     local reclicks = 0
@@ -3392,6 +3429,20 @@ dungeonScanButton.Activated:Connect(function()
                     count += 1
                     table.insert(lines, string.format("[%s] \"%s\" • %s", obj.ClassName, text, obj:GetFullName()))
                 end
+            end
+        end
+    end
+    local skipLabel = findAutoSkipLabel()
+    if skipLabel then
+        table.insert(lines, "== Auto Skip neighborhood ==")
+        local scope = skipLabel.Parent and skipLabel.Parent.Parent or skipLabel.Parent
+        for _, obj in ipairs(scope and scope:GetDescendants() or {}) do
+            if obj:IsA("GuiObject") and guiVisible(obj) then
+                local color = obj.BackgroundColor3
+                table.insert(lines, string.format("[%s] %s • pos %d,%d size %dx%d • bg %d,%d,%d • %s",
+                    obj.ClassName, obj.Name, obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
+                    obj.AbsoluteSize.X, obj.AbsoluteSize.Y,
+                    color.R * 255, color.G * 255, color.B * 255, obj:GetFullName()))
             end
         end
     end
