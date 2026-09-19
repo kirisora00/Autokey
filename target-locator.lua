@@ -1,4 +1,4 @@
--- Autokey v2.21 (Skills: cast as soon as the game UI says Ready): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.22 (Dungeon full auto): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -60,6 +60,7 @@ skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
     fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
     hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false, bbCache = {}, bbAt = -math.huge, bbVirtual = {}, warned = {}, buff = true}
+local dungeon = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0, rounds = 0, height = 15, holdPart = nil, stop = nil}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -122,15 +123,15 @@ create("TextLabel", {
 local tabs = {}
 for i, target in ipairs(targets) do
     tabs[i] = create("TextButton", {
-        Position = UDim2.fromOffset(10, 50 + (i - 1) * 46),
-        Size = UDim2.fromOffset(145, 38), Text = target.label,
+        Position = UDim2.fromOffset(10, 40 + (i - 1) * 40),
+        Size = UDim2.fromOffset(145, 34), Text = target.label,
         TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham,
         TextSize = 15, BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
     }, sidebar)
     create("UICorner", {CornerRadius = UDim.new(0, 7)}, tabs[i])
 end
 local flightTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 142), Size = UDim2.fromOffset(145, 38),
+    Position = UDim2.fromOffset(10, 120), Size = UDim2.fromOffset(145, 34),
     Text = "Flight / บิน", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
@@ -138,14 +139,14 @@ local flightTab = create("TextButton", {
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
-    Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.21 · Client\n− ยุบ   /   X ปิดระบบ",
+    Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.22 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 
 local duckTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 188), Size = UDim2.fromOffset(145, 38),
+    Position = UDim2.fromOffset(10, 160), Size = UDim2.fromOffset(145, 34),
     Text = "Duck Boss / เป็ด", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
@@ -153,7 +154,7 @@ local duckTab = create("TextButton", {
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, duckTab)
 
 local skillsTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 234), Size = UDim2.fromOffset(145, 38),
+    Position = UDim2.fromOffset(10, 200), Size = UDim2.fromOffset(145, 34),
     Text = "Skills / สกิล", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
@@ -161,7 +162,7 @@ local skillsTab = create("TextButton", {
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, skillsTab)
 
 local raidTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 280), Size = UDim2.fromOffset(145, 38),
+    Position = UDim2.fromOffset(10, 240), Size = UDim2.fromOffset(145, 34),
     Text = "Raid / เสกบอส", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
@@ -472,8 +473,81 @@ local raidStatus = create("TextLabel", {
     Text = "ยังไม่ได้บันทึกจุด\nAUTO: เปิด Raid → เข้าวง → ตีลูกบอล/ลูกน้องก่อน แล้วบอส (ลอยเหนือหัว) → ปิด Victory → วนใหม่",
 }, raidPage)
 
+local dungeonPage = makePage()
+dungeonPage.Visible = false
+local dungeonTab = create("TextButton", {
+    Position = UDim2.fromOffset(10, 280), Size = UDim2.fromOffset(145, 34),
+    Text = "Dungeon / ลงดัน", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
+}, sidebar)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, dungeonTab)
+
+local function dungeonRow(y, text, default)
+    create("TextLabel", {
+        Position = UDim2.fromOffset(0, y), Size = UDim2.fromOffset(290, 28),
+        BackgroundTransparency = 1, TextColor3 = colors.muted,
+        TextSize = 13, Text = text, TextXAlignment = Enum.TextXAlignment.Left,
+    }, dungeonPage)
+    return create("TextBox", {
+        Position = UDim2.new(1, -90, 0, y), Size = UDim2.fromOffset(90, 28),
+        BackgroundColor3 = colors.active, BorderSizePixel = 0,
+        TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+        Text = default, ClearTextOnFocus = false,
+    }, dungeonPage)
+end
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
+    Text = "Dungeon / ลงดัน Full Auto", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 20,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, dungeonPage)
+local bindDunPrompt = create("TextButton", {
+    Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 0, 30),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 13, Text = "1) บันทึกจุดกด E (ยืนข้าง Open Dungeon)",
+}, dungeonPage)
+local bindDunRing = create("TextButton", {
+    Position = UDim2.fromOffset(0, 68), Size = UDim2.new(1, 0, 0, 30),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 13, Text = "2) บันทึกจุดกลางวงแดง (หลังกด Spawn แล้ว)",
+}, dungeonPage)
+local dungeonAmount = dungeonRow(104, "จำนวน Orb ที่ใส่ (สูงสุด 25)", "25")
+local dungeonHeight = dungeonRow(136, "ลอยเหนือมอนกี่ studs (บอส: ใช้ค่าหน้า Raid)", "15")
+local dungeonMax = dungeonRow(168, "จำนวนรอบสูงสุด (0 = จนกว่า Orb หมด)", "0")
+local dungeonTestButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 202), Size = UDim2.new(0.5, -3, 0, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "ทดสอบ: E→ใส่→Spawn→เข้าวง",
+}, dungeonPage)
+local dungeonScanButton = create("TextButton", {
+    Position = UDim2.new(0.5, 3, 0, 202), Size = UDim2.new(0.5, -3, 0, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "สแกนหน้าจอ GUI (คัดลอก)",
+}, dungeonPage)
+local dungeonAutoButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 234), Size = UDim2.new(1, 0, 0, 34),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 15, Text = "DUNGEON AUTO: OFF — กดเพื่อวนลงดัน",
+}, dungeonPage)
+local dungeonStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 274), Size = UDim2.new(1, 0, 0, 100),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "วิธีตั้งค่า: ยืนข้าง Open Dungeon กดข้อ 1 → กด E ใส่ 25 กด Spawn ด้วยมือ 1 ครั้ง → ยืนกลางวงแดง กดข้อ 2\nอาวุธ/บัฟ J/ความสูงบอส ใช้ค่าจากหน้า Raid",
+}, dungeonPage)
+
 local function showPage(page)
     currentPage = page
+    dungeonPage.Visible = page == "dungeon"
+    dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.sidebar
     raidPage.Visible = page == "raid"
     raidTab.BackgroundColor3 = page == "raid" and colors.active or colors.sidebar
     targetPage.Visible = page == "target"
@@ -2436,8 +2510,8 @@ end
 
 local function startRaid(autoMode)
     if raid.running then raidStop("หยุดระบบ Raid แล้ว") return end
-    if auto or duck.enabled then
-        raidStatus.Text = "ปิด AUTO เป้าหมาย / Duck ก่อนใช้ระบบ Raid ครับ (เปิด Flight ได้)"
+    if auto or duck.enabled or dungeon.running then
+        raidStatus.Text = "ปิด AUTO เป้าหมาย / Duck / Dungeon ก่อนใช้ระบบ Raid ครับ (เปิด Flight ได้)"
         return
     end
     if not raid.promptPose or not raid.prompt then
@@ -2586,6 +2660,678 @@ raidWarpToggle.Activated:Connect(function()
     raidWarpToggle.BackgroundColor3 = raid.hover and colors.green or colors.active
 end)
 raidTab.Activated:Connect(function() showPage("raid") end)
+
+-- ===== Dungeon Full Auto: E (Open Dungeon) -> ใส่จำนวน Orb -> Spawn -> เข้าวง -> เปิด Auto Skip -> ลอยเหนือมอนแล้วยิงสกิล =====
+local hudCache, hudScanAt = {}, {}
+local function findHudLabel(key, test)
+    local cached = hudCache[key]
+    if cached and cached.Parent and guiVisible(cached) and test(cached) then return cached end
+    hudCache[key] = nil
+    local now = os.clock()
+    if now - (hudScanAt[key] or -math.huge) < 1 then return nil end
+    hudScanAt[key] = now
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and not obj:IsDescendantOf(gui)
+            and obj.Text ~= "" and guiVisible(obj) and test(obj) then
+            hudCache[key] = obj
+            return obj
+        end
+    end
+    return nil
+end
+
+local function findAutoSkipLabel()
+    return findHudLabel("autoskip", function(o)
+        return normalizeDuck(stripRichText(o.Text)):find("autoskip", 1, true) == 1
+    end)
+end
+local function findWaveLabel()
+    return findHudLabel("wave", function(o)
+        return stripRichText(o.Text):match("[Ww]ave%s*:?%s*%d+%s*/%s*%d+") ~= nil
+    end)
+end
+local function findStartInLabel()
+    return findHudLabel("startin", function(o)
+        return normalizeDuck(stripRichText(o.Text)):find("startin", 1, true) == 1
+    end)
+end
+local function autoSkipState(label)
+    local text = stripRichText(label.Text)
+    local c, m = text:match("%[%s*(%d+)%s*/%s*(%d+)%s*%]")
+    return tonumber(c), tonumber(m)
+end
+
+local function findDungeonPrompt(root)
+    local closest, distance = nil, math.huge
+    for _, object in ipairs(workspace:GetDescendants()) do
+        if object:IsA("ProximityPrompt") then
+            local objectText = normalizeDuck(object.ObjectText)
+            local actionText = normalizeDuck(object.ActionText)
+            local parentText = normalizeDuck(object.Parent and object.Parent.Name or "")
+            if objectText:find("opendungeon", 1, true) or actionText:find("orbdungeon", 1, true)
+                or parentText:find("opendungeon", 1, true) then
+                local position = duckPromptPosition(object)
+                if position then
+                    local d = (root.Position - position).Magnitude
+                    if d <= object.MaxActivationDistance + 2 and d < distance then
+                        closest, distance = object, d
+                    end
+                end
+            end
+        end
+    end
+    return closest, distance
+end
+
+-- หน้าต่าง Dungeon: ป้าย "Dungeon Multiplier: xN" + ช่อง Enter Amount + ปุ่ม Spawn
+local function findDungeonWindow()
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if (label:IsA("TextLabel") or label:IsA("TextButton")) and not label:IsDescendantOf(gui)
+            and guiVisible(label)
+            and normalizeDuck(stripRichText(label.Text)):find("dungeonmultiplier", 1, true) == 1 then
+            local scope = label.Parent
+            for _ = 1, 6 do
+                if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+                local box, spawnButton
+                for _, obj in ipairs(scope:GetDescendants()) do
+                    if obj:IsA("TextBox") and guiVisible(obj) then
+                        box = box or obj
+                    elseif obj:IsA("GuiButton") and guiVisible(obj)
+                        and normalizeDuck(buttonText(obj)) == "spawn" then
+                        spawnButton = spawnButton or obj
+                    end
+                end
+                if box and spawnButton then
+                    return {label = label, box = box, spawn = spawnButton}
+                end
+                scope = scope.Parent
+            end
+        end
+    end
+    return nil
+end
+
+-- ใส่จำนวน Orb แล้วตรวจว่าป้ายเปลี่ยนเป็น xN จริง
+local function setDungeonAmount(win, amount, pause)
+    local want = "x" .. amount
+    local function done()
+        local text = normalizeDuck(stripRichText(win.label.Text))
+        return text:sub(-#want) == want
+    end
+    if done() then return true end
+    local box = win.box
+    local methods = {
+        function()
+            box:CaptureFocus()
+            task.wait(0.1)
+            box.Text = tostring(amount)
+            task.wait(0.15)
+            box:ReleaseFocus(true)
+        end,
+        function()
+            box.Text = tostring(amount)
+            if typeof(getconnections) == "function" then
+                for _, signal in ipairs({box.FocusLost, box:GetPropertyChangedSignal("Text")}) do
+                    pcall(function()
+                        for _, connection in ipairs(getconnections(signal)) do
+                            connection:Fire(true)
+                        end
+                    end)
+                end
+            end
+        end,
+    }
+    for _, method in ipairs(methods) do
+        pcall(method)
+        if not pause(0.5) then return false end
+        if done() then return true end
+    end
+    return false
+end
+
+-- กดติ๊ก Auto Skip (สี่เหลี่ยมแดง -> เขียว) จนป้ายเป็น [1/1]
+local function toggleAutoSkip(label, pause)
+    local function isOn()
+        local c, m = autoSkipState(label)
+        return c ~= nil and m ~= nil and c >= m
+    end
+    if isOn() then return true end
+    local center = label.AbsolutePosition + label.AbsoluteSize / 2
+    local candidates = {}
+    local seen = {}
+    local function consider(obj, isButton)
+        if seen[obj] or obj == label or not obj:IsA("GuiObject") or not guiVisible(obj) then return end
+        if label:IsDescendantOf(obj) then return end
+        if obj.AbsoluteSize.X < 6 or obj.AbsoluteSize.X > 140 or obj.AbsoluteSize.Y > 140 then return end
+        local d = (obj.AbsolutePosition + obj.AbsoluteSize / 2 - center).Magnitude
+        if d > 260 then return end
+        seen[obj] = true
+        table.insert(candidates, {obj = obj, score = d + (isButton and 0 or 70)})
+    end
+    local scope = label
+    for _ = 1, 4 do
+        scope = scope.Parent
+        if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("GuiButton") then consider(obj, true)
+            elseif obj:IsA("Frame") or obj:IsA("ImageLabel") then consider(obj, false) end
+        end
+        if #candidates > 0 then break end
+    end
+    if label:IsA("GuiButton") then
+        table.insert(candidates, {obj = label, score = 1000})
+    end
+    table.sort(candidates, function(a, b) return a.score < b.score end)
+    for i = 1, math.min(3, #candidates) do
+        local obj = candidates[i].obj
+        for _, real in ipairs({false, true}) do
+            pressGuiButton(obj, real)
+            if not pause(0.6) then return false end
+            if isOn() then return true end
+        end
+    end
+    return isOn()
+end
+
+local function dungeonEnemies(root, now)
+    local list = {}
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model)
+            and not (raid.ignore[humanoid] and raid.ignore[humanoid] > now)
+            and not isFriendlyModel(model) then
+            local part = getPart(model)
+            if part then
+                local d = (root.Position - part.Position).Magnitude
+                if d <= 500 then
+                    table.insert(list, {model = model, humanoid = humanoid, part = part, distance = d})
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.distance < b.distance end)
+    return list
+end
+
+local function dungeonSay(text) dungeonStatus.Text = text end
+
+local function dungeonCleanup()
+    if dungeon.holdPart then
+        pcall(function() dungeon.holdPart:Destroy() end)
+        dungeon.holdPart = nil
+    end
+end
+
+local function dungeonStop(message)
+    dungeon.token += 1
+    dungeon.running = false
+    raid.fighting = false
+    raid.combatReady = false
+    raid.hoverPart = nil
+    endRaidHold()
+    if releaseSkillKeys then releaseSkillKeys() end
+    dungeonCleanup()
+    dungeonTestButton.Text = "ทดสอบ: E→ใส่→Spawn→เข้าวง"
+    dungeonTestButton.BackgroundColor3 = colors.active
+    dungeonAutoButton.Text = "DUNGEON AUTO: OFF — กดเพื่อวนลงดัน"
+    dungeonAutoButton.BackgroundColor3 = colors.blue
+    if message then dungeonStatus.Text = message end
+end
+dungeon.stop = dungeonStop
+do
+    local baseStop = raid.stop
+    raid.stop = function(message)
+        if baseStop then baseStop(message) end
+        if dungeon.running then dungeonStop(message) end
+    end
+end
+
+-- หนึ่งรอบ: เปิดหน้า Dungeon -> ใส่ Orb -> Spawn -> เข้าวง -> (fight) เปิด Auto Skip -> สู้จนจบ
+local function dungeonRound(alive, pause, fight)
+    local function ready()
+        return not (duck.enabled or auto or raid.running)
+    end
+    raid.ignore = {}
+    raid.hoverPart = nil
+    raid.fighting = false
+    raid.combatReady = false
+    hudCache, hudScanAt = {}, {}
+
+    local character, root
+    local deadline = os.clock() + 20
+    while alive() and os.clock() < deadline do
+        character, root = duckCharacter()
+        if character then break end
+        dungeonSay("รอตัวละครพร้อม...")
+        task.wait(0.5)
+    end
+    if not alive() then return "cancel" end
+    if not character then return "fail", "ตัวละครไม่พร้อมภายใน 20 วินาที หยุดระบบ Dungeon" end
+    if not ready() then return "fail", "หยุด Dungeon เพราะเปิด AUTO/Duck/Raid อยู่" end
+
+    local leftover = findVictoryLabel()
+    if leftover then
+        dungeonSay("มีหน้า Victory ค้างอยู่ กำลังปิดก่อน...")
+        dismissVictory(leftover, pause)
+        if not alive() then return "cancel" end
+    end
+
+    -- 1) วาร์ปไปจุดกด E
+    dungeonSay("วาร์ปไปจุด Open Dungeon...")
+    raidMoveTo(character, root, dungeon.promptPose)
+    if not pause(0.8) then return "cancel" end
+    local prompt
+    deadline = os.clock() + 6
+    while alive() and os.clock() < deadline do
+        character, root = duckCharacter()
+        if not character then break end
+        prompt = findDungeonPrompt(root)
+        if prompt then break end
+        task.wait(0.3)
+    end
+    if not alive() then return "cancel" end
+    if not prompt then return "fail", "ไม่พบปุ่ม E: Open Dungeon ที่จุดที่บันทึก\nบันทึกจุดกด E ใหม่" end
+    dungeon.prompt = prompt
+
+    -- 2) กดค้าง E
+    dungeonSay("กดค้าง E: Open Dungeon...")
+    raid.held = prompt
+    prompt:InputHoldBegin()
+    if not pause(math.max(0, prompt.HoldDuration) + 0.25) then return "cancel" end
+    endRaidHold()
+
+    -- 3) รอหน้าต่าง Dungeon
+    dungeonSay("รอหน้าต่าง Dungeon ขึ้น...")
+    local win
+    deadline = os.clock() + 6
+    while alive() and os.clock() < deadline do
+        win = findDungeonWindow()
+        if win then break end
+        task.wait(0.2)
+    end
+    if not alive() then return "cancel" end
+    if not win then
+        return "fail", "ไม่พบหน้าต่าง Dungeon ภายใน 6 วินาที (Orb Dungeon หมด? หรือกด E ไม่ติด)\nกดปุ่ม \"สแกนหน้าจอ GUI\" ส่งผลมาให้ผมดูได้"
+    end
+
+    -- 4) ใส่จำนวน Orb
+    local amount = math.clamp(math.floor(tonumber(dungeonAmount.Text) or 25), 1, 25)
+    dungeonSay("ใส่จำนวน Orb = " .. amount .. " ...")
+    while alive() and UserInputService:GetFocusedTextBox() and UserInputService:GetFocusedTextBox() ~= win.box do
+        task.wait(0.2)
+    end
+    if not setDungeonAmount(win, amount, pause) then
+        if not alive() then return "cancel" end
+        return "fail", "ใส่จำนวน Orb ไม่สำเร็จ (ป้ายไม่เปลี่ยนเป็น x" .. amount .. ") หยุดเพื่อไม่ให้เสีย Orb ผิดจำนวน"
+    end
+
+    -- 5) กด Spawn แล้วปิดหน้าต่าง
+    dungeonSay("กด Spawn...")
+    if not pressGuiButton(win.spawn) then return "fail", "กดปุ่ม Spawn ไม่สำเร็จ ตัวรันอาจไม่รองรับ" end
+    if not pause(0.6) then return "cancel" end
+    for _ = 1, 3 do
+        if not win.label.Parent or not guiVisible(win.label) then break end
+        closeRaidWindow(win.label, pressGuiButton)
+        if not pause(0.4) then return "cancel" end
+    end
+
+    -- 6) เข้าวงแดง
+    dungeonSay("รอวงเปิด แล้ววาร์ปเข้าวง...")
+    if not pause(1.0) then return "cancel" end
+    character, root = duckCharacter()
+    if not character then return "fail", "ตัวละครไม่พร้อมตอนเข้าวง" end
+    raidMoveTo(character, root, dungeon.ringPose)
+    if not pause(1.0) then return "cancel" end
+    if not fight then return "done", "ทดสอบเสร็จ: เปิดหน้า ใส่ Orb กด Spawn และเข้าวงแล้ว (รอเวลานับถอยหลังเอง)" end
+
+    -- 7) รอเข้าดัน (ยืนในวงจนนับถอยหลังหมด)
+    local entered
+    deadline = os.clock() + 75
+    while alive() and os.clock() < deadline do
+        character, root = duckCharacter()
+        if character then
+            entered = findAutoSkipLabel()
+            if entered then break end
+            local d = (root.Position - dungeon.ringPose.Position).Magnitude
+            if d > 3 and d < 40 then raidMoveTo(character, root, dungeon.ringPose) end
+        end
+        local startIn = findStartInLabel()
+        dungeonSay("ยืนรอในวง..." .. (startIn and ("\n" .. stripRichText(startIn.Text)) or ""))
+        task.wait(0.4)
+    end
+    if not alive() then return "cancel" end
+    if not entered then
+        return "fail", "ไม่ได้เข้าดันภายใน 75 วินาที (Orb หมด/ยืนไม่ตรงวง/ชื่อป้ายไม่ตรง) หยุด AUTO\nลองปุ่มสแกนหน้าจอ GUI ระหว่างอยู่ในดัน"
+    end
+    dungeonSay("เข้าดันแล้ว! กำลังเปิด Auto Skip...")
+    if not pause(1.5) then return "cancel" end
+
+    -- 8) ติ๊ก Auto Skip
+    local skipLabel = findAutoSkipLabel() or entered
+    if not toggleAutoSkip(skipLabel, pause) then
+        if not alive() then return "cancel" end
+        warn("Dungeon: เปิด Auto Skip ไม่สำเร็จ (ป้ายไม่เป็น [1/1]) จะลองใหม่ระหว่างสู้")
+    end
+    local lastClick = os.clock()
+    local reclicks = 0
+
+    -- 9) ถืออาวุธ + บัฟ J
+    character = duckCharacter()
+    if character then equipRaidWeapon(character) end
+    if raid.buff then
+        if not pause(0.7) then return "cancel" end
+        local waitFocus = os.clock() + 3
+        while alive() and UserInputService:GetFocusedTextBox() and os.clock() < waitFocus do
+            task.wait(0.2)
+        end
+        if not alive() then return "cancel" end
+        if not tapKey(RAID_BUFF_KEY) then warn("Dungeon: กดปุ่ม " .. RAID_BUFF_KEY .. " ไม่สำเร็จ") end
+        if not pause(0.6) then return "cancel" end
+    end
+
+    -- 10) สู้: ลอยเหนือมอนตัวใกล้สุด (ล็อกตัวเดิมจนตาย) แล้วยิงสกิลตามคูลดาวน์
+    raid.fighting = true
+    raid.combatReady = false
+    raid.hoverPart = nil
+    skills.nextAt = 0
+    local fightDeadline = os.clock() + 1800
+    local lastHud = os.clock()
+    local wave, waveMax
+    local victory
+    local victoryArmed = (findVictoryLabel() == nil)
+    local nextHud, nextRefresh, nextEquip = 0, 0, 0
+    local sticky, track, readySince = nil, {hp = 0, since = 0}, nil
+    local holding = false
+    local function endFight()
+        raid.fighting = false
+        raid.combatReady = false
+        raid.hoverPart = nil
+        releaseSkillKeys()
+    end
+    while alive() do
+        if not ready() then
+            endFight()
+            return "fail", "หยุด Dungeon เพราะเปิด AUTO/Duck/Raid อยู่"
+        end
+        local now = os.clock()
+        if now > fightDeadline then
+            endFight()
+            return "fail", "อยู่ในดันเกิน 30 นาที หยุดระบบ Dungeon"
+        end
+        if now >= nextHud then
+            nextHud = now + 1
+            local hud = findAutoSkipLabel()
+            if hud then
+                lastHud = now
+                local c, m = autoSkipState(hud)
+                if c and m and c < m and now - lastClick > 8 and reclicks < 5 then
+                    reclicks += 1
+                    lastClick = now
+                    toggleAutoSkip(hud, pause)
+                end
+            end
+            local waveLabel = findWaveLabel()
+            if waveLabel then
+                local w, mw = stripRichText(waveLabel.Text):match("[Ww]ave%s*:?%s*(%d+)%s*/%s*(%d+)")
+                wave, waveMax = tonumber(w), tonumber(mw)
+            end
+            local label = findVictoryLabel()
+            if not label then
+                victoryArmed = true
+            elseif victoryArmed then
+                victory = label
+                break
+            end
+            if now - lastHud > 10 then break end -- หน้าจอดันหายไป = ออกจากดันแล้ว
+        end
+        character, root = duckCharacter()
+        if not character then
+            raid.combatReady = false
+            raid.hoverPart = nil
+            readySince = nil
+            releaseSkillKeys()
+            dungeonSay("รอตัวละครเกิดใหม่...")
+            task.wait(0.5)
+            continue
+        end
+        if now >= nextRefresh then
+            nextRefresh = now + 3
+            refreshTracked()
+        end
+        if now >= nextEquip then
+            nextEquip = now + 1
+            equipRaidWeapon(character)
+        end
+
+        local enemies = dungeonEnemies(root, now)
+        if sticky and not (sticky.humanoid.Health > 0 and sticky.humanoid:IsDescendantOf(workspace)
+            and not (raid.ignore[sticky.humanoid] and raid.ignore[sticky.humanoid] > now)) then
+            sticky = nil
+        end
+        if not sticky then sticky = enemies[1] end
+        local target = sticky
+        if target then
+            holding = false
+            local health = target.humanoid.Health
+            if track.humanoid ~= target.humanoid then
+                track = {humanoid = target.humanoid, hp = health, since = now}
+                readySince = nil
+                raid.combatReady = false
+                releaseSkillKeys()
+            end
+            if health < track.hp - 0.5 then
+                track.hp = health
+                track.since = now
+            elseif health > track.hp then
+                track.hp = health
+            end
+            if now - track.since > 15 then
+                raid.ignore[target.humanoid] = now + 30
+                warn("Dungeon: ข้ามเป้าหมายที่ไม่ลดเลือด " .. target.model.Name)
+                sticky = nil
+                continue
+            end
+            local isBoss = target.humanoid.MaxHealth >= 50000
+            raid.hoverPart = target.part
+            raid.hoverOffset = isBoss and raid.bossHeight or dungeon.height
+            readySince = readySince or now
+            if now - readySince >= 0.6 then raid.combatReady = true end
+            if raid.combatReady then
+                dungeonSay(string.format("สู้: %s%s\nHP %.0f/%.0f • มอนเหลือ %d • Wave %s/%s • รอบที่ %d",
+                    isBoss and "[บอส] " or "", target.model.Name, health, target.humanoid.MaxHealth,
+                    #enemies, tostring(wave or "?"), tostring(waveMax or "?"), dungeon.rounds + 1))
+                useDuckSkill(character, root, target)
+            else
+                dungeonSay("เข้าตำแหน่งเหนือหัว: " .. target.model.Name)
+            end
+        else
+            -- ไม่มีมอน: ลอยค้างที่เดิม (ไม่ยืนบนพื้น) รอเวฟถัดไป
+            raid.combatReady = false
+            readySince = nil
+            releaseSkillKeys()
+            if not dungeon.holdPart or not dungeon.holdPart.Parent then
+                local part = Instance.new("Part")
+                part.Anchored = true
+                part.CanCollide = false
+                part.CanQuery = false
+                part.CanTouch = false
+                part.Transparency = 1
+                part.Size = Vector3.new(1, 1, 1)
+                part.Parent = workspace
+                dungeon.holdPart = part
+                holding = false
+            end
+            if not holding then
+                dungeon.holdPart.Position = root.Position
+                holding = true
+            end
+            raid.hoverPart = dungeon.holdPart
+            raid.hoverOffset = 0
+            dungeonSay(string.format("รอเวฟถัดไป... Wave %s/%s", tostring(wave or "?"), tostring(waveMax or "?")))
+        end
+        task.wait(0.25)
+    end
+    endFight()
+    dungeonCleanup()
+    if not alive() then return "cancel" end
+
+    -- 11) จบดัน
+    if victory then
+        dungeonSay("ชนะแล้ว! กำลังปิดหน้า Victory...")
+        if not pause(0.8) then return "cancel" end
+        if not dismissVictory(victory, pause) then
+            if not alive() then return "cancel" end
+            return "fail", "ปิดหน้า Victory ไม่สำเร็จ หยุด AUTO เพื่อกันเสีย Orb\nปิดหน้าต่างเอง แล้วกดเริ่มใหม่"
+        end
+    elseif not (wave and waveMax and wave >= waveMax) then
+        return "fail", string.format("ออกจากดันก่อนจบ (Wave %s/%s) อาจตาย/หมดเวลา หยุด AUTO เพื่อกันเสีย Orb",
+            tostring(wave or "?"), tostring(waveMax or "?"))
+    end
+    -- รอกลับล็อบบี้ (หน้าจอดันหาย)
+    dungeonSay("รอกลับล็อบบี้...")
+    deadline = os.clock() + 25
+    while alive() and os.clock() < deadline do
+        hudScanAt = {}
+        if not findAutoSkipLabel() and duckCharacter() then break end
+        task.wait(0.5)
+    end
+    if not alive() then return "cancel" end
+    if findAutoSkipLabel() then
+        return "fail", "จบดันแล้วแต่ยังไม่ออกจากดันภายใน 25 วินาที หยุด AUTO\nออกจากดันเอง แล้วกดเริ่มใหม่"
+    end
+    return "done", "จบรอบ: ชนะดันแล้ว"
+end
+
+local function startDungeon(autoMode)
+    if dungeon.running then dungeonStop("หยุดระบบ Dungeon แล้ว") return end
+    if auto or duck.enabled or raid.running then
+        dungeonStatus.Text = "ปิด AUTO เป้าหมาย / Duck / Raid ก่อนใช้ระบบ Dungeon ครับ (เปิด Flight ได้)"
+        return
+    end
+    if not dungeon.promptPose or not dungeon.prompt then
+        dungeonStatus.Text = "กดบันทึกจุดกด E (ข้อ 1) ก่อนครับ"
+        return
+    end
+    if not dungeon.ringPose then
+        dungeonStatus.Text = "กดบันทึกจุดกลางวงแดง (ข้อ 2) ก่อนครับ"
+        return
+    end
+    dungeon.height = math.clamp(tonumber(dungeonHeight.Text) or 15, 3, 300)
+    dungeon.token += 1
+    local token = dungeon.token
+    dungeon.running = true
+    dungeon.rounds = 0
+    if autoMode then
+        dungeonAutoButton.Text = "DUNGEON AUTO: ON — กดเพื่อหยุด"
+        dungeonAutoButton.BackgroundColor3 = colors.green
+    else
+        dungeonTestButton.Text = "กำลังทำงาน — กดเพื่อหยุด"
+        dungeonTestButton.BackgroundColor3 = colors.green
+    end
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local function alive() return running and dungeon.running and dungeon.token == token end
+            local function pause(seconds)
+                local untilTime = os.clock() + seconds
+                while alive() and os.clock() < untilTime do task.wait(0.1) end
+                return alive()
+            end
+            local maxRounds = math.max(0, math.floor(tonumber(dungeonMax.Text) or 0))
+            while alive() do
+                local result, message = dungeonRound(alive, pause, autoMode)
+                if result == "cancel" then return end
+                if result == "fail" then dungeonStop(message) return end
+                dungeon.rounds += 1
+                if not autoMode then dungeonStop(message) return end
+                if maxRounds > 0 and dungeon.rounds >= maxRounds then
+                    dungeonStop("ครบ " .. dungeon.rounds .. " รอบตามที่ตั้งไว้ ปิด AUTO แล้ว")
+                    return
+                end
+                dungeonSay("เสร็จ " .. dungeon.rounds .. " รอบ • เริ่มรอบถัดไปใน 4 วินาที")
+                if not pause(4) then return end
+            end
+        end)
+        endRaidHold()
+        if dungeon.token == token then releaseSkillKeys() end
+        if not ok then
+            dungeonStop("ระบบ Dungeon หยุดเพราะเกิด Error ดู Console")
+            warn("Dungeon Auto:", err)
+        end
+    end)
+end
+
+bindDunPrompt.Activated:Connect(function()
+    local _, root = duckCharacter()
+    if not root then dungeonStatus.Text = "รอตัวละครพร้อม และลงจากที่นั่งก่อนครับ" return end
+    local prompt, distance = findDungeonPrompt(root)
+    if not prompt then
+        dungeonStatus.Text = "ไม่พบปุ่ม E: Open Dungeon ในระยะ\nยืนให้เห็นปุ่มแล้วกดใหม่"
+        return
+    end
+    dungeon.prompt = prompt
+    dungeon.promptPose = root.CFrame
+    bindDunPrompt.Text = "1) บันทึกจุดกด E แล้ว — กดเพื่อบันทึกใหม่"
+    dungeonStatus.Text = string.format("บันทึกจุดกด E แล้ว • ระยะ %.1f studs • กดค้าง %.1f วินาที",
+        distance, prompt.HoldDuration)
+end)
+bindDunRing.Activated:Connect(function()
+    local _, root = duckCharacter()
+    if not root then dungeonStatus.Text = "รอตัวละครพร้อม และลงจากที่นั่งก่อนครับ" return end
+    dungeon.ringPose = root.CFrame
+    bindDunRing.Text = "2) บันทึกจุดวงแล้ว — กดเพื่อบันทึกใหม่"
+    dungeonStatus.Text = "บันทึกจุดกลางวงแดงแล้ว"
+end)
+dungeonHeight.FocusLost:Connect(function()
+    dungeon.height = math.clamp(tonumber(dungeonHeight.Text) or 15, 3, 300)
+    dungeonHeight.Text = tostring(dungeon.height)
+end)
+dungeonAmount.FocusLost:Connect(function()
+    dungeonAmount.Text = tostring(math.clamp(math.floor(tonumber(dungeonAmount.Text) or 25), 1, 25))
+end)
+dungeonMax.FocusLost:Connect(function()
+    dungeonMax.Text = tostring(math.max(0, math.floor(tonumber(dungeonMax.Text) or 0)))
+end)
+dungeonTestButton.Activated:Connect(function() startDungeon(false) end)
+dungeonAutoButton.Activated:Connect(function() startDungeon(true) end)
+
+-- สแกนหน้าจอ: รายการข้อความ GUI ที่มองเห็น + ProximityPrompt ใกล้ตัว คัดลอกลง Clipboard
+dungeonScanButton.Activated:Connect(function()
+    local lines = {"== Dungeon GUI scan =="}
+    local count = 0
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if not obj:IsDescendantOf(gui) and guiVisible(obj) then
+            if (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) then
+                local text = obj:IsA("TextBox") and (obj.Text ~= "" and obj.Text or ("<placeholder>" .. obj.PlaceholderText)) or obj.Text
+                if text ~= "" and count < 80 then
+                    count += 1
+                    table.insert(lines, string.format("[%s] \"%s\" • %s", obj.ClassName, text, obj:GetFullName()))
+                end
+            end
+        end
+    end
+    local _, root = duckCharacter()
+    if root then
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if object:IsA("ProximityPrompt") then
+                local position = duckPromptPosition(object)
+                if position and (root.Position - position).Magnitude <= 40 then
+                    table.insert(lines, string.format("[Prompt] Object=\"%s\" Action=\"%s\" Enabled=%s • %s",
+                        object.ObjectText, object.ActionText, tostring(object.Enabled), object:GetFullName()))
+                end
+            end
+        end
+    end
+    local report = table.concat(lines, "\n")
+    print(report)
+    local copied = false
+    local copyFunction = setclipboard or toclipboard
+    if copyFunction then copied = pcall(copyFunction, report) end
+    dungeonStatus.Text = string.format("สแกนแล้ว %d รายการ • %s", count,
+        copied and "คัดลอกลง Clipboard แล้ว ส่งให้ผมได้" or "ดูผลใน Console (F9)")
+end)
+dungeonTab.Activated:Connect(function() showPage("dungeon") end)
+
 
 local function autoStep(entries)
     if not auto then return end
