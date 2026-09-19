@@ -1,4 +1,4 @@
--- Autokey v2.25 (Dungeon: Auto Skip multi-method click + diagnostics): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.26 (Dungeon: Auto Skip single-toggle safe click + test button): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -140,7 +140,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.25 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.26 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -529,14 +529,20 @@ local dungeonScanButton = create("TextButton", {
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 12, Text = "สแกนหน้าจอ GUI (คัดลอก)",
 }, dungeonPage)
+local dungeonSkipButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 233), Size = UDim2.new(1, 0, 0, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "ทดสอบกด Auto Skip (กดตอนอยู่ในดัน)",
+}, dungeonPage)
 local dungeonAutoButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 234), Size = UDim2.new(1, 0, 0, 34),
+    Position = UDim2.fromOffset(0, 264), Size = UDim2.new(1, 0, 0, 34),
     BackgroundColor3 = colors.blue, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 15, Text = "DUNGEON AUTO: OFF — กดเพื่อวนลงดัน",
 }, dungeonPage)
 local dungeonStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 274), Size = UDim2.new(1, 0, 0, 100),
+    Position = UDim2.fromOffset(0, 302), Size = UDim2.new(1, 0, 0, 72),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
@@ -2827,6 +2833,14 @@ local function toggleAutoSkip(label, pause)
         table.insert(candidates, {obj = label, score = 1000})
     end
     table.sort(candidates, function(a, b) return a.score < b.score end)
+
+    -- สถานะที่ใช้ตรวจว่ากดติดแล้ว: ข้อความป้าย + สีของสี่เหลี่ยม (ป้ายอาจอัปเดตช้า) จะกดวิธีถัดไปก็ต่อเมื่อไม่มีอะไรเปลี่ยนเลย
+    -- (กันกดซ้ำแล้วสลับกลับเป็นปิด)
+    local function snapshot(obj)
+        local color = obj:IsA("GuiObject") and obj.BackgroundColor3 or Color3.new()
+        local image = obj:IsA("ImageLabel") and obj.ImageColor3 or Color3.new()
+        return string.format("%s|%.2f,%.2f,%.2f|%.2f,%.2f,%.2f", label.Text, color.R, color.G, color.B, image.R, image.G, image.B)
+    end
     local function fakeInput(obj, state)
         return {
             UserInputType = Enum.UserInputType.MouseButton1, UserInputState = state,
@@ -2837,6 +2851,7 @@ local function toggleAutoSkip(label, pause)
         }
     end
     local methods = {
+        function(obj) pressGuiButton(obj, true) end, -- คลิกเมาส์จริงก่อน (ใกล้เคียงผู้เล่นที่สุด)
         function(obj) if obj:IsA("GuiButton") then pressGuiButton(obj, false) end end,
         function(obj)
             if typeof(firesignal) ~= "function" or not obj:IsA("GuiButton") then return end
@@ -2854,17 +2869,26 @@ local function toggleAutoSkip(label, pause)
                 end)
             end
         end,
-        function(obj) pressGuiButton(obj, true) end,
     }
     local log = {}
     for i = 1, math.min(6, #candidates) do
         local obj = candidates[i].obj
         for m, method in ipairs(methods) do
+            local before = snapshot(obj)
             pcall(method, obj)
-            if not pause(0.5) then return false end
-            if isOn() then
-                warn(string.format("Dungeon: เปิด Auto Skip สำเร็จด้วย %s (ตัวที่ %d) วิธี %d", obj:GetFullName(), i, m))
-                return true
+            -- รอให้เซิร์ฟเวอร์ตอบ/ป้ายอัปเดต (สูงสุด ~1.6 วินาที) ก่อนตัดสินว่าไม่ติด
+            local changed = false
+            for _ = 1, 8 do
+                if not pause(0.2) then return false end
+                if isOn() then changed = true break end
+                if snapshot(obj) ~= before then changed = true break end
+            end
+            if changed then
+                if not pause(0.8) then return false end
+                warn(string.format("Dungeon: Auto Skip ตอบสนอง (%s ตัวที่ %d วิธี %d) ป้าย: %s",
+                    obj:GetFullName(), i, m, label.Text))
+                dungeon.skipLog = string.format("กดที่ %s %s วิธี %d", obj.ClassName, obj.Name, m)
+                return true -- ไม่กดซ้ำ กันสลับกลับเป็นปิด
             end
         end
         table.insert(log, string.format("%s %s %dx%d", obj.ClassName, obj.Name, obj.AbsoluteSize.X, obj.AbsoluteSize.Y))
@@ -2895,7 +2919,9 @@ local function dungeonEnemies(root, now)
     return list
 end
 
-local function dungeonSay(text) dungeonStatus.Text = text end
+local function dungeonSay(text)
+    dungeonStatus.Text = text .. (dungeon.note and ("\n" .. dungeon.note) or "")
+end
 
 local function dungeonCleanup()
     if dungeon.holdPart then
@@ -3130,10 +3156,14 @@ local function dungeonRound(alive, pause, fight)
 
     -- 8) ติ๊ก Auto Skip
     local skipLabel = findAutoSkipLabel() or entered
-    if not toggleAutoSkip(skipLabel, pause) then
+    dungeon.note = nil
+    if toggleAutoSkip(skipLabel, pause) then
+        dungeon.note = "Auto Skip: เปิดแล้ว ✔"
+    else
         if not alive() then return "cancel" end
+        dungeon.note = "Auto Skip: ไม่สำเร็จ ✖ (กดสแกน GUI ส่งให้ผม)"
         warn("Dungeon: เปิด Auto Skip ไม่สำเร็จ (ป้ายไม่เป็น [1/1]) จะลองใหม่ระหว่างสู้")
-        dungeonSay("เปิด Auto Skip ไม่สำเร็จ ลองแล้ว:\n" .. tostring(dungeon.skipLog or "-") .. "\nกดสแกนหน้าจอ GUI แล้วส่งให้ผม")
+        dungeonSay("เปิด Auto Skip ไม่สำเร็จ ลองแล้ว:\n" .. tostring(dungeon.skipLog or "-"))
     end
     local lastClick = os.clock()
     local reclicks = 0
@@ -3465,6 +3495,16 @@ dungeonScanButton.Activated:Connect(function()
     if copyFunction then copied = pcall(copyFunction, report) end
     dungeonStatus.Text = string.format("สแกนแล้ว %d รายการ • %s", count,
         copied and "คัดลอกลง Clipboard แล้ว ส่งให้ผมได้" or "ดูผลใน Console (F9)")
+end)
+dungeonSkipButton.Activated:Connect(function()
+    local label = findAutoSkipLabel()
+    if not label then dungeonStatus.Text = "ไม่พบป้าย Auto Skip (ต้องอยู่ในดันก่อน)" return end
+    dungeonStatus.Text = "กำลังทดสอบกด Auto Skip: " .. stripRichText(label.Text)
+    task.spawn(function()
+        local ok = toggleAutoSkip(label, function(s) task.wait(s) return true end)
+        dungeonStatus.Text = (ok and "ผล: ป้ายเป็น " or "ผล: ยังไม่ติด ป้ายเป็น ") .. stripRichText(label.Text)
+            .. "\n" .. tostring(dungeon.skipLog or "")
+    end)
 end)
 dungeonTab.Activated:Connect(function() showPage("dungeon") end)
 
