@@ -1,4 +1,4 @@
--- Autokey v2.5: sidebar, flight, targets, continuous follow for moving targets (Devil Boat), and cancellable Duck Boss summon loop
+-- Autokey v2.6: sidebar, flight (position-locked: skills cannot push you), targets, continuous follow (Devil Boat), and cancellable Duck Boss summon loop
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -135,7 +135,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 310), Size = UDim2.fromOffset(137, 65),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.5 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.6 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -439,6 +439,8 @@ local function startFlight()
 
     flight.velocity = velocity
     flight.orientation = orientation
+    -- ตำแหน่งที่ล็อกไว้: สกิลจะดัน/ดึง/วาร์ปตัวละครไม่ได้ ขยับได้เฉพาะเมื่อเรากดปุ่มบินเอง
+    flight.cf = root.CFrame
     humanoid.AutoRotate = false
     humanoid.PlatformStand = true
     root.AssemblyLinearVelocity = Vector3.zero
@@ -485,7 +487,17 @@ table.insert(flightConnections, player.CharacterRemoving:Connect(function()
     stopFlight("ตัวละครหายไป เปิดบินใหม่หลังเกิดครับ")
 end))
 
-table.insert(flightConnections, RunService.RenderStepped:Connect(function()
+-- หลังฟิสิกส์คำนวณเสร็จทุกเฟรม ดึงตัวละครกลับตำแหน่งที่ล็อกไว้ (กันสกิลเคลื่อนที่/พุ่ง/ดัน)
+table.insert(flightConnections, RunService.Heartbeat:Connect(function()
+    local f = flight
+    if not running or not f or not f.cf then return end
+    if player.Character ~= f.character or not f.root:IsDescendantOf(workspace) then return end
+    f.root.CFrame = f.cf
+    f.root.AssemblyLinearVelocity = Vector3.zero
+    f.root.AssemblyAngularVelocity = Vector3.zero
+end))
+
+table.insert(flightConnections, RunService.RenderStepped:Connect(function(dt)
     if not running or not flight then return end
     local ok, err = pcall(function()
         local f = flight
@@ -519,8 +531,14 @@ table.insert(flightConnections, RunService.RenderStepped:Connect(function()
             end
         end
         if movement.Magnitude > 1 then movement = movement.Unit end
-        f.velocity.VectorVelocity = movement * flySpeed
+        -- เคลื่อนที่ด้วยตำแหน่งที่ล็อกไว้เอง ไม่ใช้ความเร็วฟิสิกส์ จึงไม่โดนสกิลแทรก
+        local newPos = f.cf.Position + movement * flySpeed * math.min(dt, 0.1)
+        f.cf = CFrame.lookAt(newPos, newPos + forward)
+        f.velocity.VectorVelocity = Vector3.zero
         f.orientation.CFrame = CFrame.lookAt(Vector3.zero, forward)
+        f.root.CFrame = f.cf
+        f.root.AssemblyLinearVelocity = Vector3.zero
+        f.root.AssemblyAngularVelocity = Vector3.zero
     end)
     if not ok then
         stopFlight("หยุดบินเพราะเกิด Error ดู Console")
