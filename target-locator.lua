@@ -1,4 +1,4 @@
--- Autokey v2.27 (Dungeon: Auto Skip button found via WaveUI.AutoSkip, click offset fix): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.28 (Raid: retry when boss 'Already Spawned'): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -140,7 +140,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.27 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.28 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -2224,52 +2224,80 @@ local function raidRound(alive, pause, fight)
         if not alive() then return "cancel" end
     end
 
-    -- 1) วาร์ปไปจุดกด E แล้วหาปุ่ม (ปุ่มอาจถูกสร้างใหม่หลังจบรอบ)
-    raidSay("วาร์ปไปจุด Open Raid...")
-    raidMoveTo(character, root, raid.promptPose)
-    if not pause(0.8) then return "cancel" end
-    local prompt
-    deadline = os.clock() + 6
-    while alive() and os.clock() < deadline do
-        character, root = duckCharacter()
-        if not character then break end
-        prompt = findOpenRaidPrompt(root)
-        if prompt then break end
-        task.wait(0.3)
-    end
-    if not alive() then return "cancel" end
-    if not prompt then return "fail", "ไม่พบปุ่ม E: Open Raid ที่จุดที่บันทึก\nบันทึกจุดกด E ใหม่" end
-    raid.prompt = prompt
+    local prompt, button, windowLabel
+    for attempt = 1, 12 do
+        -- 1) วาร์ปไปจุดกด E แล้วหาปุ่ม (ปุ่มอาจถูกสร้างใหม่หลังจบรอบ)
+        raidSay("วาร์ปไปจุด Open Raid...")
+        raidMoveTo(character, root, raid.promptPose)
+        if not pause(0.8) then return "cancel" end
+        deadline = os.clock() + 6
+        while alive() and os.clock() < deadline do
+            character, root = duckCharacter()
+            if not character then break end
+            prompt = findOpenRaidPrompt(root)
+            if prompt then break end
+            task.wait(0.3)
+        end
+        if not alive() then return "cancel" end
+        if not prompt then return "fail", "ไม่พบปุ่ม E: Open Raid ที่จุดที่บันทึก\nบันทึกจุดกด E ใหม่" end
+        raid.prompt = prompt
 
-    -- 2) กดค้าง E
-    raidSay("กดค้าง E: Open Raid...")
-    raid.held = prompt
-    prompt:InputHoldBegin()
-    if not pause(math.max(0, prompt.HoldDuration) + 0.25) then return "cancel" end
-    endRaidHold()
+        -- 2) กดค้าง E
+        raidSay("กดค้าง E: Open Raid...")
+        raid.held = prompt
+        prompt:InputHoldBegin()
+        if not pause(math.max(0, prompt.HoldDuration) + 0.25) then return "cancel" end
+        endRaidHold()
 
-    -- 3) รอหน้า Raid Boss แล้วกด Open
-    raidSay("รอหน้า Raid Boss ขึ้น...")
-    local button, windowLabel
-    deadline = os.clock() + 6
-    while alive() and os.clock() < deadline do
-        button, windowLabel = findRaidOpenButton()
-        if button then break end
-        task.wait(0.15)
-    end
-    if not alive() then return "cancel" end
-    if not button then return "fail", "ไม่พบหน้า Raid Boss หรือปุ่ม Open ภายใน 6 วินาที" end
-    raidSay("กดปุ่ม Open...")
-    if not pressGuiButton(button) then
-        return "fail", "กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ"
-    end
+        -- 3) รอหน้า Raid Boss แล้วกด Open
+        raidSay("รอหน้า Raid Boss ขึ้น...")
+        deadline = os.clock() + 6
+        while alive() and os.clock() < deadline do
+            button, windowLabel = findRaidOpenButton()
+            if button then break end
+            task.wait(0.15)
+        end
+        if not alive() then return "cancel" end
+        if not button then return "fail", "ไม่พบหน้า Raid Boss หรือปุ่ม Open ภายใน 6 วินาที" end
+        raidSay("กดปุ่ม Open...")
+        if not pressGuiButton(button) then
+            return "fail", "กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ"
+        end
 
-    -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
-    if not pause(0.4) then return "cancel" end
-    for _ = 1, 3 do
-        if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
-        closeRaidWindow(windowLabel, pressGuiButton)
-        if not pause(0.3) then return "cancel" end
+        -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
+        if not pause(0.4) then return "cancel" end
+        for _ = 1, 3 do
+            if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
+            closeRaidWindow(windowLabel, pressGuiButton)
+            if not pause(0.3) then return "cancel" end
+        end
+
+        -- เกมแจ้ง "... Is Already Spawned!" = บอสรอบก่อนยังไม่หาย/ยังเสกไม่ได้: รอแล้วลองกด E ใหม่ ไม่ใช่วาร์ปเข้าวง
+        local spawnedNotice = false
+        local noticeUntil = os.clock() + 1.6
+        while alive() and os.clock() < noticeUntil do
+            for _, obj in ipairs(playerGui:GetDescendants()) do
+                if obj:IsA("TextLabel") and not obj:IsDescendantOf(gui) and obj.Text ~= ""
+                    and normalizeDuck(stripRichText(obj.Text)):find("alreadyspawned", 1, true)
+                    and guiVisible(obj) then
+                    spawnedNotice = true
+                    break
+                end
+            end
+            if spawnedNotice then break end
+            task.wait(0.15)
+        end
+        if not alive() then return "cancel" end
+        if spawnedNotice then
+            if attempt >= 12 then
+                return "fail", "เกมแจ้งว่าบอสยังเสกอยู่ (Already Spawned) ต่อเนื่องนานเกินไป หยุด AUTO"
+            end
+            raidSay(string.format("บอสรอบก่อนยังไม่หาย (Already Spawned) รอ 6 วินาทีแล้วลองกด Open ใหม่ (%d/12)", attempt))
+            if not pause(6) then return "cancel" end
+            continue
+        end
+        break
+
     end
 
     -- 4) รอวงเปิด แล้ววาร์ปเข้าวง
