@@ -1,4 +1,4 @@
--- Autokey v2.23 (Dungeon: fix close window + Auto Skip click): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.24 (Dungeon: safe window close, GUI repair, Auto Skip click): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -140,7 +140,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.23 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.24 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -1782,8 +1782,8 @@ end
 
 local function pressGuiButton(btn, real)
     local fired = false
-    if not real and typeof(getconnections) == "function" then
-        for _, signal in ipairs({btn.Activated, btn.MouseButton1Click}) do
+    if not real and btn:IsA("GuiButton") and typeof(getconnections) == "function" then
+        for _, signal in ipairs({btn.Activated, btn.MouseButton1Click, btn.MouseButton1Down, btn.MouseButton1Up}) do
             pcall(function()
                 for _, connection in ipairs(getconnections(signal)) do
                     connection:Fire()
@@ -2892,6 +2892,83 @@ do
     end
 end
 
+-- ปิดหน้าต่าง Dungeon อย่างปลอดภัย: กด X (สัญญาณ -> คลิกจริง) ถ้าไม่ได้ผลค่อยซ่อนกรอบนอกสุดของหน้าต่าง (จดไว้เพื่อคืนค่า)
+dungeon.hidden = {}
+local function restoreDungeonHidden()
+    for obj in pairs(dungeon.hidden) do
+        pcall(function() obj.Visible = true end)
+    end
+    dungeon.hidden = {}
+end
+dungeon.restore = restoreDungeonHidden
+
+local function findWindowXButton(win)
+    local scope = win.label.Parent
+    for _ = 1, 8 do
+        if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("GuiButton") and guiVisible(obj) then
+                local name = normalizeDuck(obj.Name)
+                if normalizeDuck(buttonText(obj)) == "x" or name == "x" or name == "close" or name == "exit" then
+                    return obj
+                end
+            end
+        end
+        scope = scope.Parent
+    end
+    return nil
+end
+
+local function closeDungeonWindow(win, pause)
+    local function isOpen() return win.label.Parent and guiVisible(win.label) end
+    for attempt = 1, 4 do
+        if not isOpen() then return true end
+        local xButton = findWindowXButton(win)
+        if xButton then pressGuiButton(xButton, attempt > 2) end
+        if not pause(0.6) then return false end
+    end
+    if not isOpen() then return true end
+    -- สำรอง: ซ่อนกรอบหน้าต่างนอกสุด (ไม่ใหญ่เกินไป) แล้วจดไว้คืนค่ารอบหน้า
+    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    local best
+    local frame = win.label.Parent
+    while frame and frame ~= playerGui and not frame:IsA("ScreenGui") do
+        if frame:IsA("GuiObject") and frame:IsAncestorOf(win.spawn) and frame:IsAncestorOf(win.box)
+            and frame.AbsoluteSize.X < viewport.X * 0.9 and frame.AbsoluteSize.Y < viewport.Y * 0.95 then
+            best = frame
+        end
+        frame = frame.Parent
+    end
+    if best then
+        dungeon.hidden[best] = true
+        best.Visible = false
+    end
+    return not isOpen()
+end
+
+-- ซ่อมหน้าต่าง Dungeon ที่ถูกซ่อนจนช่องใส่จำนวนหาย: เปิดป้าย Multiplier / ช่อง Enter Amount และกรอบแม่กลับมา
+local function repairDungeonWindow()
+    local fixed = 0
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if label:IsA("TextLabel") and not label:IsDescendantOf(gui)
+            and normalizeDuck(stripRichText(label.Text)):find("dungeonmultiplier", 1, true) == 1
+            and not guiVisible(label) then
+            local current = label
+            while current and current ~= playerGui do
+                if current:IsA("GuiObject") and not current.Visible then current.Visible = true fixed += 1 end
+                if current:IsA("ScreenGui") and not current.Enabled then current.Enabled = true fixed += 1 end
+                if current.Parent and current.Parent:IsA("GuiObject") then
+                    for _, sibling in ipairs(current.Parent:GetChildren()) do
+                        if sibling:IsA("TextBox") and not sibling.Visible then sibling.Visible = true fixed += 1 end
+                    end
+                end
+                current = current.Parent
+            end
+        end
+    end
+    return fixed
+end
+
 -- หนึ่งรอบ: เปิดหน้า Dungeon -> ใส่ Orb -> Spawn -> เข้าวง -> (fight) เปิด Auto Skip -> สู้จนจบ
 local function dungeonRound(alive, pause, fight)
     local function ready()
@@ -2902,6 +2979,7 @@ local function dungeonRound(alive, pause, fight)
     raid.fighting = false
     raid.combatReady = false
     hudCache, hudScanAt = {}, {}
+    restoreDungeonHidden()
 
     local character, root
     local deadline = os.clock() + 20
@@ -2949,10 +3027,16 @@ local function dungeonRound(alive, pause, fight)
     -- 3) รอหน้าต่าง Dungeon
     dungeonSay("รอหน้าต่าง Dungeon ขึ้น...")
     local win
-    deadline = os.clock() + 6
+    deadline = os.clock() + 8
+    local repaired = false
     while alive() and os.clock() < deadline do
         win = findDungeonWindow()
         if win then break end
+        if not repaired and os.clock() > deadline - 5 then
+            repaired = true
+            local fixed = repairDungeonWindow()
+            if fixed > 0 then warn("Dungeon: ซ่อมหน้าต่างที่ถูกซ่อน " .. fixed .. " จุด") end
+        end
         task.wait(0.2)
     end
     if not alive() then return "cancel" end
@@ -2975,14 +3059,7 @@ local function dungeonRound(alive, pause, fight)
     dungeonSay("กด Spawn...")
     if not pressGuiButton(win.spawn) then return "fail", "กดปุ่ม Spawn ไม่สำเร็จ ตัวรันอาจไม่รองรับ" end
     if not pause(0.6) then return "cancel" end
-    local pressReal = function(btn) return pressGuiButton(btn, true) end
-    for attempt = 1, 5 do
-        if not win.label.Parent or not guiVisible(win.label) then break end
-        if attempt <= 2 then closeRaidWindow(win.label, pressGuiButton)
-        elseif attempt <= 4 then closeRaidWindow(win.label, pressReal)
-        else closeRaidWindow(win.label, pressReal, true) end
-        if not pause(0.5) then return "cancel" end
-    end
+    if not closeDungeonWindow(win, pause) and not alive() then return "cancel" end
 
     -- 6) เข้าวงแดง
     dungeonSay("รอวงเปิด แล้ววาร์ปเข้าวง...")
