@@ -1,4 +1,4 @@
--- Autokey v2.20 (Raid: robust Victory close, stale-Victory guard, stop when no Victory): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.21 (Skills: cast as soon as the game UI says Ready): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -52,7 +52,8 @@ local duckMarker = nil
 local releaseReturnGuard
 local releaseSkillKeys
 local skills = {enabled = true, selected = {Z = true, X = true, C = true, V = true, F = true},
-    cursor = 0, nextAt = 0, lastCastAt = -math.huge, held = {}, interval = 3, quiet = 6}
+    cursor = 0, nextAt = 0, gapUntil = 0, readyMode = true, minGap = 0.35,
+    lastCastAt = -math.huge, held = {}, interval = 3, quiet = 6}
 local skillInput = nil
 local skillInputMode = nil
 skills.castTracks = {}
@@ -138,7 +139,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.20 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.21 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -351,8 +352,14 @@ local skillToggle = create("TextButton", {
     Font = Enum.Font.GothamBold, TextSize = 15,
     Text = "BOSS SKILLS: ON — กดเพื่อปิด", BorderSizePixel = 0,
 }, skillsPage)
+local skillReadyToggle = create("TextButton", {
+    Position = UDim2.fromOffset(0, 292), Size = UDim2.new(1, 0, 0, 34),
+    BackgroundColor3 = colors.green, TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 13,
+    Text = "ใช้สกิลทันทีที่ Ready (อ่านจากแผงสกิลเกม): ON", BorderSizePixel = 0,
+}, skillsPage)
 local skillStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 298), Size = UDim2.new(1, 0, 0, 70),
+    Position = UDim2.fromOffset(0, 332), Size = UDim2.new(1, 0, 0, 40),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
@@ -951,6 +958,76 @@ local function watchSkillAnimations(character)
     end)
 end
 
+-- อ่านสถานะคูลดาวน์จากแผงสกิลของเกม (เช่น "Z - Ready" / "Z - UnReady 5")
+local skillLabelMap, skillLabelAt = {}, -math.huge
+
+local function stripRichText(text)
+    return (tostring(text or ""):gsub("<[^>]->", ""))
+end
+
+local function skillGuiVisible(obj)
+    local current = obj
+    while current and current ~= playerGui do
+        if current:IsA("GuiObject") and not current.Visible then return false end
+        if current:IsA("ScreenGui") and not current.Enabled then return false end
+        current = current.Parent
+    end
+    return true
+end
+
+local function stateWord(text)
+    local word = string.match(string.lower(stripRichText(text)), "^%s*%a%s*%-%s*(%a+)")
+        or string.match(string.lower(stripRichText(text)), "^%s*(%a+)")
+    return word
+end
+
+local function refreshSkillLabels()
+    skillLabelAt = os.clock()
+    skillLabelMap = {}
+    local wanted = {}
+    for _, key in ipairs(skillOrder) do wanted[key] = true end
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj:IsA("TextLabel") and not obj:IsDescendantOf(gui) and skillGuiVisible(obj) then
+            local plain = stripRichText(obj.Text)
+            local key, word = string.match(plain, "^%s*(%a)%s*%-%s*(%a+)")
+            key = key and string.upper(key)
+            if key and wanted[key] and word and (string.lower(word) == "ready" or string.lower(word) == "unready") then
+                skillLabelMap[key] = obj -- ข้อความรวมในป้ายเดียว
+            else
+                -- แบบแยกป้าย: ป้าย "Z -" อยู่คู่กับป้าย "Ready"/"UnReady" ในแถวเดียวกัน
+                local onlyKey = string.match(plain, "^%s*(%a)%s*%-?%s*$")
+                onlyKey = onlyKey and string.upper(onlyKey)
+                if onlyKey and wanted[onlyKey] and not skillLabelMap[onlyKey] then
+                    local row = obj.Parent
+                    for _ = 1, 2 do
+                        if not row then break end
+                        local found
+                        for _, other in ipairs(row:GetDescendants()) do
+                            if other ~= obj and other:IsA("TextLabel") then
+                                local word2 = stateWord(other.Text)
+                                if word2 == "ready" or word2 == "unready" then found = other break end
+                            end
+                        end
+                        if found then skillLabelMap[onlyKey] = found break end
+                        row = row.Parent
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- true = พร้อมใช้, false = ติดคูลดาวน์, nil = อ่านสถานะจากหน้าจอไม่ได้
+local function skillIsReady(key)
+    if os.clock() - skillLabelAt > 1.5 then refreshSkillLabels() end
+    local label = skillLabelMap[key]
+    if not label or not label.Parent then return nil end
+    local word = stateWord(label.Text)
+    if word == "ready" then return true end
+    if word == "unready" then return false end
+    return nil
+end
+
 local function useDuckSkill(character, root, boss)
     if not skills.enabled then return end
     if UserInputService:GetFocusedTextBox() then
@@ -960,18 +1037,33 @@ local function useDuckSkill(character, root, boss)
     local inDuck = duck.enabled and duck.phase == "FIGHT" and duck.combatReady and not duck.deathSeen
     local inRaid = raid.fighting and raid.combatReady
     if not (inDuck or inRaid) or boss.humanoid.Health <= 0 then return end
-    if os.clock() < skills.nextAt or next(skills.held) then return end
-    if root.Anchored or actionAnimationPlaying(character) then
+    if os.clock() < skills.gapUntil or next(skills.held) then return end
+    -- โหมดตามคูลดาวน์: ไม่รอแอนิเมชันจบ ใช้ทันทีที่เกมบอกว่า Ready
+    if not skills.readyMode and (root.Anchored or actionAnimationPlaying(character)) then
         skillStatus.Text = "รอสกิลก่อนหน้าจบ..."
         return
     end
     local key
+    local anySelected = false
     for _ = 1, #skillOrder do
         skills.cursor = skills.cursor % #skillOrder + 1
         local candidate = skillOrder[skills.cursor]
-        if skills.selected[candidate] then key = candidate break end
+        if skills.selected[candidate] then
+            anySelected = true
+            if not skills.readyMode then
+                key = candidate
+                break
+            end
+            local ready = skillIsReady(candidate)
+            -- ready == nil = อ่านสถานะไม่ได้ ใช้ตามเวลาเว้นระหว่างสกิลแทน
+            if ready == true or (ready == nil and os.clock() >= skills.nextAt) then
+                key = candidate
+                break
+            end
+        end
     end
-    if not key then skillStatus.Text = "ยังไม่ได้เลือกปุ่มสกิล" return end
+    if not anySelected then skillStatus.Text = "ยังไม่ได้เลือกปุ่มสกิล" return end
+    if not key then skillStatus.Text = "รอคูลดาวน์สกิล..." return end
 
     if not initializeSkillInput() then
         skills.enabled = false
@@ -987,6 +1079,7 @@ local function useDuckSkill(character, root, boss)
         skills.held[key] = true
         skills.lastCastAt = os.clock()
         skills.nextAt = os.clock() + skills.interval
+        skills.gapUntil = os.clock() + (skills.readyMode and skills.minGap or skills.interval)
         sendSkillKey(key, true)
     end)
     if not ok then
@@ -1000,7 +1093,7 @@ local function useDuckSkill(character, root, boss)
         warn("Autokey skill input:", err)
         return
     end
-    skillStatus.Text = "ส่งสกิล " .. key .. " แล้ว • รอสกิลก่อนหน้าจบ"
+    skillStatus.Text = "ส่งสกิล " .. key .. " แล้ว" .. (skills.readyMode and " • ใช้ตัวต่อไปทันทีที่ Ready" or " • รอสกิลก่อนหน้าจบ")
     task.delay(0.12, function()
         if skills.held[key] then
             local released, releaseError = pcall(function() sendSkillKey(key, false) end)
@@ -1033,6 +1126,12 @@ skillToggle.Activated:Connect(function()
     if not skills.enabled then releaseSkillKeys() end
     skillToggle.Text = skills.enabled and "BOSS SKILLS: ON — กดเพื่อปิด" or "BOSS SKILLS: OFF — กดเพื่อเปิด"
     skillToggle.BackgroundColor3 = skills.enabled and colors.green or colors.active
+end)
+skillReadyToggle.Activated:Connect(function()
+    skills.readyMode = not skills.readyMode
+    skillReadyToggle.Text = skills.readyMode and "ใช้สกิลทันทีที่ Ready (อ่านจากแผงสกิลเกม): ON"
+        or "ใช้สกิลตามเวลาที่ตั้ง (ไม่อ่านคูลดาวน์): OFF"
+    skillReadyToggle.BackgroundColor3 = skills.readyMode and colors.green or colors.active
 end)
 skillInterval.FocusLost:Connect(function()
     skills.interval = math.clamp(tonumber(skillInterval.Text) or 3, 1, 30)
