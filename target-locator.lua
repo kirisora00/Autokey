@@ -1,4 +1,4 @@
--- Autokey v2.22 (Dungeon full auto): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.23 (Dungeon: fix close window + Auto Skip click): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -140,7 +140,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.22 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.23 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -1797,8 +1797,13 @@ local function pressGuiButton(btn, real)
     local okInput, manager = pcall(function() return game:GetService("VirtualInputManager") end)
     if okInput and manager then
         local inset = game:GetService("GuiService"):GetGuiInset()
+        -- ScreenGui ที่ IgnoreGuiInset = พิกัดเริ่มที่มุมจอจริง ไม่ต้องบวกแถบบน
+        local screenGui = btn:FindFirstAncestorWhichIsA("ScreenGui")
+        if screenGui and screenGui.IgnoreGuiInset then inset = Vector2.zero end
         local center = btn.AbsolutePosition + btn.AbsoluteSize / 2 + inset
         local sent = pcall(function()
+            pcall(function() manager:SendMouseMoveEvent(center.X, center.Y, game) end)
+            task.wait(0.05)
             manager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
             task.wait(0.05)
             manager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
@@ -2970,10 +2975,13 @@ local function dungeonRound(alive, pause, fight)
     dungeonSay("กด Spawn...")
     if not pressGuiButton(win.spawn) then return "fail", "กดปุ่ม Spawn ไม่สำเร็จ ตัวรันอาจไม่รองรับ" end
     if not pause(0.6) then return "cancel" end
-    for _ = 1, 3 do
+    local pressReal = function(btn) return pressGuiButton(btn, true) end
+    for attempt = 1, 5 do
         if not win.label.Parent or not guiVisible(win.label) then break end
-        closeRaidWindow(win.label, pressGuiButton)
-        if not pause(0.4) then return "cancel" end
+        if attempt <= 2 then closeRaidWindow(win.label, pressGuiButton)
+        elseif attempt <= 4 then closeRaidWindow(win.label, pressReal)
+        else closeRaidWindow(win.label, pressReal, true) end
+        if not pause(0.5) then return "cancel" end
     end
 
     -- 6) เข้าวงแดง
