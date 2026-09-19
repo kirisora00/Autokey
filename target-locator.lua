@@ -1,4 +1,4 @@
--- Autokey v2.13 (Raid FULL AUTO: hover above the top of the target model): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.15 (Raid FULL AUTO: fixed wandering to far objects after adds): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -58,7 +58,7 @@ local skillInputMode = nil
 skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
     fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
-    hover = true, bossEntry = nil, hoverPart = nil, hoverModel = nil, ignore = {}}
+    hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -138,7 +138,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.13 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.15 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -385,49 +385,61 @@ local bindRaidRing = create("TextButton", {
     TextSize = 13, Text = "2) บันทึกจุดกลางวงวาร์ป",
 }, raidPage)
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 158), Size = UDim2.fromOffset(117, 28),
+    Position = UDim2.fromOffset(0, 154), Size = UDim2.fromOffset(117, 28),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, Text = "ชื่อบอส Raid:",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, raidPage)
 local raidBossName = create("TextBox", {
-    Position = UDim2.fromOffset(118, 158), Size = UDim2.new(1, -118, 0, 28),
+    Position = UDim2.fromOffset(118, 154), Size = UDim2.new(1, -118, 0, 28),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "Bacon of Grudge", ClearTextOnFocus = false,
 }, raidPage)
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 192), Size = UDim2.fromOffset(280, 28),
+    Position = UDim2.fromOffset(0, 186), Size = UDim2.fromOffset(280, 28),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, Text = "จำนวนรอบสูงสุด (0 = จนกว่าของหมด)",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, raidPage)
 local raidMax = create("TextBox", {
-    Position = UDim2.new(1, -97, 0, 192), Size = UDim2.fromOffset(97, 28),
+    Position = UDim2.new(1, -97, 0, 186), Size = UDim2.fromOffset(97, 28),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "0", ClearTextOnFocus = false,
 }, raidPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 218), Size = UDim2.fromOffset(280, 28),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "ความสูงเหนือกลางตัวบอส (studs)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, raidPage)
+local raidHeight = create("TextBox", {
+    Position = UDim2.new(1, -97, 0, 218), Size = UDim2.fromOffset(97, 28),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "30", ClearTextOnFocus = false,
+}, raidPage)
 local raidWarpToggle = create("TextButton", {
-    Position = UDim2.fromOffset(0, 224), Size = UDim2.new(1, 0, 0, 28),
+    Position = UDim2.fromOffset(0, 250), Size = UDim2.new(1, 0, 0, 26),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 13, Text = "โหมดสู้: FULL AUTO เกาะเหนือหัวเป้าหมาย (กดเพื่อสลับ)",
 }, raidPage)
 local raidButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 258), Size = UDim2.new(1, 0, 0, 30),
+    Position = UDim2.fromOffset(0, 280), Size = UDim2.new(1, 0, 0, 26),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 14, Text = "เปิด + วาร์ปเข้าวง (1 ครั้ง ไม่สู้)",
 }, raidPage)
 local raidAutoButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 292), Size = UDim2.new(1, 0, 0, 34),
+    Position = UDim2.fromOffset(0, 310), Size = UDim2.new(1, 0, 0, 30),
     BackgroundColor3 = colors.blue, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 15, Text = "RAID AUTO: OFF — กดเพื่อวนต่อเนื่อง",
 }, raidPage)
 local raidStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 330), Size = UDim2.new(1, 0, 0, 44),
+    Position = UDim2.fromOffset(0, 344), Size = UDim2.new(1, 0, 0, 30),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
@@ -1741,9 +1753,8 @@ local function findRaidBoss(root, allowFallback)
 end
 
 -- ===== Raid combat helpers: ลูกบอล/ลูกน้อง (adds) ก่อน แล้วค่อยบอส โดยเกาะอยู่เหนือหัวเป้าหมายตลอด =====
-local RAID_HOVER_HEIGHT = 10   -- ลอยสูงจากจุดกลางตัวเป้าหมายอย่างน้อยกี่ studs (ขั้นต่ำ)
-local RAID_HOVER_MARGIN = 14   -- ลอยสูงเหนือ "จุดสูงสุดของโมเดล" กี่ studs (บอสตัวใหญ่ ปรับเพิ่ม/ลดได้)
-local RAID_ADD_RADIUS = 250    -- ระยะสแกนหาลูกน้อง/ลูกบอลรอบตัว
+local RAID_ADD_HEIGHT = 10     -- ลอยเหนือลูกบอล/ลูกน้องกี่ studs (บอสตั้งค่าในช่องบนหน้าจอ)
+local RAID_ADD_RADIUS = 120    -- ลูกน้อง/ลูกบอลต้องอยู่ห่างจากบอสไม่เกินกี่ studs (กันไปเกาะของประดับฉากไกลๆ)
 
 -- กันไม่ให้ไปนับสัตว์เลี้ยง/Ally/ของเราเป็นศัตรู
 local function isFriendlyModel(model)
@@ -1780,7 +1791,8 @@ local function findRaidAdds(root, boss)
             local part = getPart(model)
             if part then
                 local d = (root.Position - part.Position).Magnitude
-                if d <= RAID_ADD_RADIUS then
+                local center = boss and boss.part.Position or root.Position
+                if (center - part.Position).Magnitude <= RAID_ADD_RADIUS then
                     table.insert(adds, {model = model, humanoid = humanoid, part = part, distance = d})
                 end
             end
@@ -1816,16 +1828,7 @@ table.insert(flightConnections, RunService.Heartbeat:Connect(function()
     if not part.Parent then return end
     local character, root = duckCharacter()
     if not character then return end
-    -- คำนวณความสูงจากกรอบของโมเดลทั้งตัว จึงอยู่เหนือหัวบอสตัวใหญ่ได้พอดี
-    local top
-    local model = raid.hoverModel
-    if model and model.Parent then
-        local ok, boxCFrame, boxSize = pcall(function() return model:GetBoundingBox() end)
-        if ok then top = boxCFrame.Position.Y + boxSize.Y / 2 end
-    end
-    top = top or (part.Position.Y + part.Size.Y / 2)
-    local height = math.max(part.Position.Y + RAID_HOVER_HEIGHT, top + RAID_HOVER_MARGIN)
-    local target = Vector3.new(part.Position.X, height, part.Position.Z)
+    local target = part.Position + Vector3.new(0, raid.hoverOffset or RAID_ADD_HEIGHT, 0)
     root.CFrame = CFrame.new(target) * root.CFrame.Rotation
     root.AssemblyLinearVelocity = Vector3.zero
     root.AssemblyAngularVelocity = Vector3.zero
@@ -2051,7 +2054,7 @@ local function raidRound(alive, pause, fight)
                         bossStale.since = now
                     end
                     -- บอสไม่ลดเลือดนาน = อาจมีโล่จากลูกบอลที่ไม่ใช่ Humanoid: ลองตีวัตถุคล้ายลูกบอลสลับกัน
-                    if now - bossStale.since > 15 then
+                    if raid.orbFallback and now - bossStale.since > 40 then
                         if now - orbCacheAt > 5 then
                             orbCache = findOrbCandidates(root)
                             orbCacheAt = now
@@ -2066,7 +2069,7 @@ local function raidRound(alive, pause, fight)
                     bossStale.hp = nil
                 end
                 raid.hoverPart = hoverPart
-                raid.hoverModel = (hoverPart == target.part) and target.model or nil
+                raid.hoverOffset = (kind == "บอส" and hoverPart == target.part) and raid.bossHeight or RAID_ADD_HEIGHT
                 readySince = readySince or now
                 if now - readySince >= 0.6 then raid.combatReady = true end
             else
@@ -2211,6 +2214,10 @@ bindRaidRing.Activated:Connect(function()
     raidStatus.Text = "บันทึกจุดกลางวงวาร์ปแล้ว"
 end)
 
+raidHeight.FocusLost:Connect(function()
+    raid.bossHeight = math.clamp(tonumber(raidHeight.Text) or 30, 3, 300)
+    raidHeight.Text = tostring(raid.bossHeight)
+end)
 raidMax.FocusLost:Connect(function()
     raidMax.Text = tostring(math.max(0, math.floor(tonumber(raidMax.Text) or 0)))
 end)
