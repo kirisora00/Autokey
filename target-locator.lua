@@ -1,4 +1,4 @@
--- Autokey v2.18 (Raid: auto-equip weapon tool): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.20 (Raid: robust Victory close, stale-Victory guard, stop when no Victory): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -58,7 +58,7 @@ local skillInputMode = nil
 skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
     fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
-    hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false, bbCache = {}, bbAt = -math.huge, bbVirtual = {}, warned = {}}
+    hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false, bbCache = {}, bbAt = -math.huge, bbVirtual = {}, warned = {}, buff = true}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -138,7 +138,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.18 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.20 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -371,8 +371,14 @@ create("TextLabel", {
     TextSize = 13, Text = "อาวุธที่ถือ (ชื่อบนแถบ):",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, raidPage)
+local raidBuffButton = create("TextButton", {
+    Position = UDim2.new(1, -100, 0, 42), Size = UDim2.fromOffset(100, 30),
+    BackgroundColor3 = colors.green, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "บัฟ J: ON",
+}, raidPage)
 local raidWeapon = create("TextBox", {
-    Position = UDim2.fromOffset(152, 42), Size = UDim2.new(1, -152, 0, 30),
+    Position = UDim2.fromOffset(152, 42), Size = UDim2.new(1, -258, 0, 30),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 15,
     Text = "CidBeta", ClearTextOnFocus = false,
@@ -1570,37 +1576,40 @@ local function findRaidOpenButton()
     return nil
 end
 
--- ปิดหน้าต่าง Raid Boss หลังกด Open: กดปุ่ม X ของหน้าต่างนั้น ถ้าไม่พบจะซ่อนกรอบหน้าต่างแทน
-local function closeRaidWindow(label, press)
+-- ปิดหน้าต่าง (Raid Boss / Victory): กดปุ่ม X ของหน้าต่างนั้น; ถ้า hide=true หรือไม่พบปุ่ม จะซ่อนกรอบหน้าต่างแทน
+local function closeRaidWindow(label, press, hide)
     if not label or not label.Parent then return true end
-    local scope = label.Parent
-    for _ = 1, 8 do
-        if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
-        for _, obj in ipairs(scope:GetDescendants()) do
-            if obj:IsA("GuiButton") and guiVisible(obj)
-                and normalizeDuck(buttonText(obj)) == "x" then
-                if press(obj) then return true end
+    if not hide then
+        local scope = label.Parent
+        for _ = 1, 8 do
+            if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+            for _, obj in ipairs(scope:GetDescendants()) do
+                if obj:IsA("GuiButton") and guiVisible(obj)
+                    and normalizeDuck(buttonText(obj)) == "x" then
+                    if press(obj) then return true end
+                end
             end
+            scope = scope.Parent
         end
-        scope = scope.Parent
     end
     -- สำรอง: ซ่อนกรอบหน้าต่าง (ขนาดพอดีหน้าต่าง ไม่ใช่ทั้งจอ)
     local frame = label.Parent
     local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
     while frame and frame ~= playerGui and not frame:IsA("ScreenGui") do
-        if frame:IsA("GuiObject") and frame.AbsoluteSize.X >= 300 and frame.AbsoluteSize.Y >= 200
+        if frame:IsA("GuiObject") and frame.AbsoluteSize.X >= 250 and frame.AbsoluteSize.Y >= 100
             and frame.AbsoluteSize.X < viewport.X * 0.8 and frame.AbsoluteSize.Y < viewport.Y * 0.9 then
             frame.Visible = false
             return true
         end
         frame = frame.Parent
     end
+    label.Visible = false
     return false
 end
 
-local function pressGuiButton(btn)
+local function pressGuiButton(btn, real)
     local fired = false
-    if typeof(getconnections) == "function" then
+    if not real and typeof(getconnections) == "function" then
         for _, signal in ipairs({btn.Activated, btn.MouseButton1Click}) do
             pcall(function()
                 for _, connection in ipairs(getconnections(signal)) do
@@ -1946,6 +1955,24 @@ local function findVictoryLabel()
     return nil
 end
 
+-- ปิดหน้า Victory ให้ได้แน่นอน: ลองกดปุ่ม X (ยิงสัญญาณ) -> คลิกจริง -> ซ่อนกรอบ พร้อมตรวจว่าหายจริง
+local function dismissVictory(label, pause)
+    local pressReal = function(btn) return pressGuiButton(btn, true) end
+    local attempts = {
+        function() closeRaidWindow(label, pressGuiButton) end,
+        function() closeRaidWindow(label, pressGuiButton) end,
+        function() closeRaidWindow(label, pressReal) end,
+        function() closeRaidWindow(label, pressReal, true) end,
+        function() closeRaidWindow(label, pressReal, true) end,
+    }
+    for _, attempt in ipairs(attempts) do
+        if not label.Parent or not guiVisible(label) then return true end
+        attempt()
+        if not pause(0.6) then return false end
+    end
+    return not label.Parent or not guiVisible(label)
+end
+
 -- ถืออาวุธ (Tool ในกระเป๋า/แถบด้านล่าง) ตามชื่อที่ตั้งไว้ ถ้ายังไม่ได้ถือ; เว้นช่องว่างเพื่อปิด
 local function equipRaidWeapon(character)
     local wanted = normalizeDuck(raidWeapon.Text)
@@ -1968,6 +1995,16 @@ local function equipRaidWeapon(character)
             return
         end
     end
+end
+
+-- กดปุ่มหนึ่งครั้ง (กดลง-ปล่อย) เช่น J เปิดบัฟเพิ่มพลัง: ปุ่มนี้กดซ้ำจะปิด จึงกดแค่รอบละครั้ง
+local RAID_BUFF_KEY = "J"
+local function tapKey(key)
+    if not initializeSkillInput() then return false end
+    local pressed = pcall(function() sendSkillKey(key, true) end)
+    task.wait(0.1)
+    pcall(function() sendSkillKey(key, false) end)
+    return pressed
 end
 
 -- หนึ่งรอบ: เปิด Raid -> เข้าวง -> (ถ้า fight) สู้บอส -> ปิดหน้า Victory
@@ -1997,6 +2034,14 @@ local function raidRound(alive, pause, fight)
     if not alive() then return "cancel" end
     if not character then return "fail", "ตัวละครไม่พร้อมภายใน 20 วินาที หยุดระบบ Raid" end
     if not ready() then return "fail", "หยุด Raid เพราะเปิด AUTO/Duck อยู่" end
+
+    -- 0) ถ้ามีหน้า Victory ของรอบก่อนค้างอยู่ ต้องปิดก่อน ไม่งั้นรอบใหม่จะเข้าใจผิดว่าชนะแล้ว
+    local leftover = findVictoryLabel()
+    if leftover then
+        raidSay("มีหน้า Victory ค้างอยู่ กำลังปิดก่อนเริ่มรอบ...")
+        dismissVictory(leftover, pause)
+        if not alive() then return "cancel" end
+    end
 
     -- 1) วาร์ปไปจุดกด E แล้วหาปุ่ม (ปุ่มอาจถูกสร้างใหม่หลังจบรอบ)
     raidSay("วาร์ปไปจุด Open Raid...")
@@ -2089,6 +2134,23 @@ local function raidRound(alive, pause, fight)
         return "fail", "ไม่พบบอสตามชื่อ \"" .. raidBossName.Text .. "\" ภายใน 35 วินาที (Portal Gun หมด/วาร์ปไม่สำเร็จ/ชื่อบอสไม่ตรง)" .. nearby
     end
 
+    -- 5.5) ถืออาวุธ แล้วกด J เปิดบัฟ 1 ครั้งต่อรอบ (บัฟหลุดทุกครั้งที่ออกจากด่าน และกดซ้ำจะปิด)
+    if raid.buff then
+        raidSay("ถืออาวุธและเปิดบัฟ " .. RAID_BUFF_KEY .. "...")
+        character = duckCharacter()
+        if character then equipRaidWeapon(character) end
+        if not pause(0.7) then return "cancel" end
+        local waitFocus = os.clock() + 3
+        while alive() and UserInputService:GetFocusedTextBox() and os.clock() < waitFocus do
+            task.wait(0.2)
+        end
+        if not alive() then return "cancel" end
+        if not tapKey(RAID_BUFF_KEY) then
+            warn("Raid: กดปุ่ม " .. RAID_BUFF_KEY .. " ไม่สำเร็จ (ตัวรันอาจไม่รองรับการจำลองปุ่ม)")
+        end
+        if not pause(0.8) then return "cancel" end
+    end
+
     -- 6) สู้บอสแบบ Full Auto: ลูกบอล/ลูกน้อง (ตัวใกล้สุด) ก่อน -> บอส โดยลอยเหนือหัวเป้าหมายตลอด
     raid.fighting = true
     raid.combatReady = false
@@ -2096,6 +2158,9 @@ local function raidRound(alive, pause, fight)
     skills.nextAt = 0
     local fightDeadline = os.clock() + 1500
     local missingSince, victory, readySince
+    local fightStart = os.clock()
+    -- หน้า Victory จะนับก็ต่อเมื่อเพิ่งปรากฏหลังเริ่มสู้ (กันหน้าเก่าที่ค้างมาหลอกว่าชนะ)
+    local victoryArmed = (findVictoryLabel() == nil)
     local nextVictory, nextRefresh, nextEquip = 0, 0, 0
     local track = {humanoid = nil, hp = 0, since = 0}
     local bossStale = {hp = nil, since = 0}
@@ -2118,8 +2183,18 @@ local function raidRound(alive, pause, fight)
         end
         if now >= nextVictory then
             nextVictory = now + 1
-            victory = findVictoryLabel()
-            if victory then break end
+            local label = findVictoryLabel()
+            if not label then
+                victoryArmed = true
+            elseif victoryArmed then
+                local cached = raid.bossEntry
+                if cached and isAlive(cached) and now - fightStart < 30 then
+                    victoryArmed = false -- บอสยังไม่ตาย ไม่ใช่ชัยชนะจริง
+                else
+                    victory = label
+                    break
+                end
+            end
         end
         character, root = duckCharacter()
         if not character then
@@ -2248,16 +2323,16 @@ local function raidRound(alive, pause, fight)
         end
         if not alive() then return "cancel" end
     end
-    if victory then
-        raidSay("ชนะแล้ว! กำลังปิดหน้า Victory...")
-        if not pause(0.8) then return "cancel" end
-        for _ = 1, 4 do
-            if not victory.Parent or not guiVisible(victory) then break end
-            closeRaidWindow(victory, pressGuiButton)
-            if not pause(0.5) then return "cancel" end
-        end
+    if not victory then
+        return "fail", "ไม่พบหน้า Victory (อาจแพ้/หมดเวลา/ตายระหว่างสู้)\nหยุด AUTO เพื่อไม่ให้เสีย Portal Gun โดยไม่จำเป็น"
     end
-    return "done", victory and "จบรอบ: ชนะและปิดหน้า Victory แล้ว" or "จบรอบ (ไม่พบหน้า Victory)"
+    raidSay("ชนะแล้ว! กำลังปิดหน้า Victory...")
+    if not pause(0.8) then return "cancel" end
+    if not dismissVictory(victory, pause) then
+        if not alive() then return "cancel" end
+        return "fail", "ปิดหน้า Victory ไม่สำเร็จ หยุด AUTO เพื่อไม่ให้เสีย Portal Gun\nปิดหน้าต่างเอง แล้วกดเริ่มใหม่"
+    end
+    return "done", "จบรอบ: ชนะและปิดหน้า Victory แล้ว"
 end
 
 local function startRaid(autoMode)
@@ -2361,6 +2436,11 @@ raidButton.Activated:Connect(function() startRaid(false) end)
 raidAutoButton.Activated:Connect(function() startRaid(true) end)
 
 -- ปุ่มสแกน: รายงานสิ่งมีชีวิต/แถบเลือดรอบตัว คัดลอกลง Clipboard (ถ้าตัวรันรองรับ) และพิมพ์ลง Console
+raidBuffButton.Activated:Connect(function()
+    raid.buff = not raid.buff
+    raidBuffButton.Text = raid.buff and "บัฟ J: ON" or "บัฟ J: OFF"
+    raidBuffButton.BackgroundColor3 = raid.buff and colors.green or colors.active
+end)
 raidScanButton.Activated:Connect(function()
     local _, root = duckCharacter()
     if not root then raidStatus.Text = "รอตัวละครพร้อมก่อนสแกน" return end
