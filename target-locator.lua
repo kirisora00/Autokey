@@ -1,4 +1,4 @@
--- Autokey v2.10 (Raid boss detection fix): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.12 (Raid FULL AUTO: orbs/adds first, hover above target): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -57,7 +57,8 @@ local skillInput = nil
 local skillInputMode = nil
 skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
-    fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil}
+    fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
+    hover = true, bossEntry = nil, hoverPart = nil, ignore = {}}
 
 local colors = {
     window = Color3.fromRGB(24, 25, 30),
@@ -137,7 +138,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
     Position = UDim2.fromOffset(15, 330), Size = UDim2.fromOffset(137, 60),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.10 · Client\n− ยุบ   /   X ปิดระบบ",
+    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.12 · Client\n− ยุบ   /   X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
@@ -407,25 +408,31 @@ local raidMax = create("TextBox", {
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "0", ClearTextOnFocus = false,
 }, raidPage)
+local raidWarpToggle = create("TextButton", {
+    Position = UDim2.fromOffset(0, 224), Size = UDim2.new(1, 0, 0, 28),
+    BackgroundColor3 = colors.green, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 13, Text = "โหมดสู้: FULL AUTO เกาะเหนือหัวเป้าหมาย (กดเพื่อสลับ)",
+}, raidPage)
 local raidButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 226), Size = UDim2.new(1, 0, 0, 34),
+    Position = UDim2.fromOffset(0, 258), Size = UDim2.new(1, 0, 0, 30),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 14, Text = "เปิด + วาร์ปเข้าวง (1 ครั้ง ไม่สู้)",
 }, raidPage)
 local raidAutoButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 266), Size = UDim2.new(1, 0, 0, 38),
+    Position = UDim2.fromOffset(0, 292), Size = UDim2.new(1, 0, 0, 34),
     BackgroundColor3 = colors.blue, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 15, Text = "RAID AUTO: OFF — กดเพื่อวนต่อเนื่อง",
 }, raidPage)
 local raidStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 310), Size = UDim2.new(1, 0, 0, 62),
+    Position = UDim2.fromOffset(0, 330), Size = UDim2.new(1, 0, 0, 44),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ยังไม่ได้บันทึกจุด\nAUTO: เปิด Raid → วาร์ปเข้าวง → สู้บอส → ปิดหน้า Victory → วนใหม่ • หยุดเมื่อบอสไม่เกิด (Portal Gun หมด)",
+    Text = "ยังไม่ได้บันทึกจุด\nAUTO: เปิด Raid → เข้าวง → ตีลูกบอล/ลูกน้องก่อน แล้วบอส (ลอยเหนือหัว) → ปิด Victory → วนใหม่",
 }, raidPage)
 
 local function showPage(page)
@@ -576,6 +583,8 @@ table.insert(flightConnections, RunService.Heartbeat:Connect(function()
     local f = flight
     if not running or not f or not f.cf then return end
     if player.Character ~= f.character or not f.root:IsDescendantOf(workspace) then return end
+    -- เกมวาร์ปตัวละครไกล (เข้า/ออกด่าน Raid) ให้ยอมรับตำแหน่งใหม่ ส่วนสกิลที่ดัน/พุ่งระยะสั้นยังถูกล็อก
+    if (f.root.Position - f.cf.Position).Magnitude > 200 then f.cf = f.root.CFrame end
     f.root.CFrame = f.cf
     f.root.AssemblyLinearVelocity = Vector3.zero
     f.root.AssemblyAngularVelocity = Vector3.zero
@@ -590,6 +599,7 @@ table.insert(flightConnections, RunService.RenderStepped:Connect(function(dt)
             stopFlight("หยุดบินแล้ว เปิดใหม่เมื่อตัวละครพร้อมครับ")
             return
         end
+        if (f.root.Position - f.cf.Position).Magnitude > 200 then f.cf = f.root.CFrame end
         local camera = workspace.CurrentCamera
         if not camera then
             f.velocity.VectorVelocity = Vector3.zero
@@ -782,6 +792,7 @@ local function warp(entry)
     character:PivotTo(targetRoot * rootToPivot)
     root.AssemblyLinearVelocity = Vector3.zero
     root.AssemblyAngularVelocity = Vector3.zero
+    if flight and flight.root == root then flight.cf = root.CFrame end
 
     return true, "วาร์ปแล้ว", character
 end
@@ -1616,6 +1627,8 @@ local function raidMoveTo(character, root, pose)
     character:PivotTo(pose * rootToPivot)
     root.AssemblyLinearVelocity = Vector3.zero
     root.AssemblyAngularVelocity = Vector3.zero
+    -- ถ้าบินอยู่ ให้ย้ายตำแหน่งล็อกของ Flight ตามด้วย ไม่งั้นจะถูกดึงกลับ
+    if flight and flight.root == root then flight.cf = root.CFrame end
 end
 
 local function endRaidHold()
@@ -1630,6 +1643,7 @@ local function raidStop(message)
     raid.auto = false
     raid.fighting = false
     raid.combatReady = false
+    raid.hoverPart = nil
     endRaidHold()
     if releaseSkillKeys then releaseSkillKeys() end
     raidButton.Text = "เปิด + วาร์ปเข้าวง (1 ครั้ง ไม่สู้)"
@@ -1726,6 +1740,89 @@ local function findRaidBoss(root, allowFallback)
     return best
 end
 
+-- ===== Raid combat helpers: ลูกบอล/ลูกน้อง (adds) ก่อน แล้วค่อยบอส โดยเกาะอยู่เหนือหัวเป้าหมายตลอด =====
+local RAID_HOVER_HEIGHT = 10   -- ลอยสูงเหนือหัวเป้าหมายกี่ studs (ปรับได้)
+local RAID_ADD_RADIUS = 250    -- ระยะสแกนหาลูกน้อง/ลูกบอลรอบตัว
+
+-- กันไม่ให้ไปนับสัตว์เลี้ยง/Ally/ของเราเป็นศัตรู
+local function isFriendlyModel(model)
+    local playerName = normalizeDuck(player.Name)
+    local displayName = normalizeDuck(player.DisplayName)
+    local current = model
+    while current and current ~= workspace do
+        local name = normalizeDuck(current.Name)
+        if name == playerName or name == displayName
+            or name:find("ally", 1, true) or name:find("summon", 1, true)
+            or name:find("companion", 1, true) then
+            return true
+        end
+        if current:GetAttribute("Owner") or current:GetAttribute("OwnerId")
+            or current:GetAttribute("OwnerUserId") then
+            return true
+        end
+        current = current.Parent
+    end
+    return false
+end
+
+-- ศัตรูอื่นที่ไม่ใช่บอส (ลูกบอลซ้าย/ขวา, ลูกน้องที่บอสเรียก) เรียงใกล้→ไกล
+local function findRaidAdds(root, boss)
+    local adds = {}
+    local now = os.clock()
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model)
+            and not (boss and model == boss.model)
+            and not (raid.ignore[humanoid] and raid.ignore[humanoid] > now)
+            and not isFriendlyModel(model) then
+            local part = getPart(model)
+            if part then
+                local d = (root.Position - part.Position).Magnitude
+                if d <= RAID_ADD_RADIUS then
+                    table.insert(adds, {model = model, humanoid = humanoid, part = part, distance = d})
+                end
+            end
+        end
+    end
+    table.sort(adds, function(a, b) return a.distance < b.distance end)
+    return adds
+end
+
+-- สำรอง: ถ้าบอสไม่ลดเลือดนานๆ และไม่เจอลูกบอลที่เป็น Humanoid ให้ลองหาวัตถุที่ชื่อคล้ายลูกบอล/โล่
+local function findOrbCandidates(root)
+    local out = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") or obj:IsA("BasePart") then
+            local name = normalizeDuck(obj.Name)
+            if (name:find("orb", 1, true) or name:find("ball", 1, true) or name:find("sphere", 1, true)
+                or name:find("crystal", 1, true) or name:find("shield", 1, true))
+                and not isPlayer(obj) and not obj:IsDescendantOf(gui) then
+                local part = obj:IsA("BasePart") and obj or getPart(obj)
+                if part and (root.Position - part.Position).Magnitude <= 200 then
+                    table.insert(out, {name = obj.Name, part = part})
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- ล็อกให้ตัวละครลอยอยู่เหนือหัวเป้าหมายทุกเฟรม (ไม่ยืนบนพื้น) ตามเป้าหมายที่เคลื่อนที่
+table.insert(flightConnections, RunService.Heartbeat:Connect(function()
+    if not running or not raid.fighting or not raid.hoverPart then return end
+    local part = raid.hoverPart
+    if not part.Parent then return end
+    local character, root = duckCharacter()
+    if not character then return end
+    local target = part.Position + Vector3.new(0, RAID_HOVER_HEIGHT, 0)
+    root.CFrame = CFrame.new(target) * root.CFrame.Rotation
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    -- ถ้าเปิด Flight ค้างไว้ ให้ตำแหน่งล็อกของ Flight ตามด้วย
+    if flight and flight.root == root then flight.cf = root.CFrame end
+end))
+
 local function findVictoryLabel()
     for _, label in ipairs(playerGui:GetDescendants()) do
         if label:IsA("TextLabel") and not label:IsDescendantOf(gui)
@@ -1740,11 +1837,13 @@ end
 -- คืนค่า "done" | "cancel" | "fail", ข้อความ
 local function raidRound(alive, pause, fight)
     local function ready()
-        if flight or duck.enabled or auto then return false end
+        if duck.enabled or auto then return false end
         return true
     end
 
     raid.bossEntry = nil
+    raid.ignore = {}
+    raid.hoverPart = nil
     -- รอตัวละครพร้อม (เผื่อเพิ่งเกิดใหม่/กลับจากด่าน)
     local character, root
     local deadline = os.clock() + 20
@@ -1756,7 +1855,7 @@ local function raidRound(alive, pause, fight)
     end
     if not alive() then return "cancel" end
     if not character then return "fail", "ตัวละครไม่พร้อมภายใน 20 วินาที หยุดระบบ Raid" end
-    if not ready() then return "fail", "หยุด Raid เพราะเปิดระบบอื่นอยู่" end
+    if not ready() then return "fail", "หยุด Raid เพราะเปิด AUTO/Duck อยู่" end
 
     -- 1) วาร์ปไปจุดกด E แล้วหาปุ่ม (ปุ่มอาจถูกสร้างใหม่หลังจบรอบ)
     raidSay("วาร์ปไปจุด Open Raid...")
@@ -1848,23 +1947,31 @@ local function raidRound(alive, pause, fight)
         return "fail", "ไม่พบบอสตามชื่อ \"" .. raidBossName.Text .. "\" ภายใน 35 วินาที (Portal Gun หมด/วาร์ปไม่สำเร็จ/ชื่อบอสไม่ตรง)" .. nearby
     end
 
-    -- 6) สู้บอส: วาร์ปเข้าหา + ส่งสกิล (ใช้ปุ่ม/เวลาจากแท็บ Skills)
+    -- 6) สู้บอสแบบ Full Auto: ลูกบอล/ลูกน้อง (ตัวใกล้สุด) ก่อน -> บอส โดยลอยเหนือหัวเป้าหมายตลอด
     raid.fighting = true
     raid.combatReady = false
+    raid.hoverPart = nil
     skills.nextAt = 0
     local fightDeadline = os.clock() + 1500
-    local missingSince, stableSince, victory
-    local lastWarp, nextVictory = 0, 0
+    local missingSince, victory, readySince
+    local nextVictory, nextRefresh = 0, 0
+    local track = {humanoid = nil, hp = 0, since = 0}
+    local bossStale = {hp = nil, since = 0}
+    local orbCache, orbCacheAt = {}, -math.huge
+    local function endFight()
+        raid.fighting = false
+        raid.combatReady = false
+        raid.hoverPart = nil
+        releaseSkillKeys()
+    end
     while alive() do
         if not ready() then
-            raid.fighting = false
-            releaseSkillKeys()
-            return "fail", "หยุด Raid เพราะเปิดระบบอื่นอยู่"
+            endFight()
+            return "fail", "หยุด Raid เพราะเปิด AUTO/Duck อยู่"
         end
         local now = os.clock()
         if now > fightDeadline then
-            raid.fighting = false
-            releaseSkillKeys()
+            endFight()
             return "fail", "สู้บอสเกิน 25 นาที หยุดระบบ Raid"
         end
         if now >= nextVictory then
@@ -1875,56 +1982,112 @@ local function raidRound(alive, pause, fight)
         character, root = duckCharacter()
         if not character then
             raid.combatReady = false
-            stableSince = nil
+            raid.hoverPart = nil
+            readySince = nil
             releaseSkillKeys()
             raidSay("รอตัวละครเกิดใหม่...")
             task.wait(0.5)
             continue
         end
-        boss = findRaidBoss(root, true)
-        if boss then
+        if now >= nextRefresh then
+            nextRefresh = now + 5
+            refreshTracked()
+        end
+
+        local boss = findRaidBoss(root, true)
+        local target, kind, addCount = nil, "", 0
+        if raid.hover then
+            local adds = findRaidAdds(root, boss)
+            addCount = #adds
+            if adds[1] then
+                target, kind = adds[1], "ลูกบอล/ลูกน้อง"
+            elseif boss then
+                target, kind = boss, "บอส"
+            end
+        elseif boss then
+            target, kind = boss, "บอส"
+        end
+
+        if target then
             missingSince = nil
-            local distance = (root.Position - boss.part.Position).Magnitude
-            if distance > 35 then
+            local health = target.humanoid.Health
+            if track.humanoid ~= target.humanoid then
+                track = {humanoid = target.humanoid, hp = health, since = now}
+                readySince = nil
                 raid.combatReady = false
-                stableSince = nil
                 releaseSkillKeys()
-                if now >= lastWarp and not root.Anchored then
-                    warp(boss)
-                    lastWarp = now + 2.5
-                    raidSay("วาร์ปเข้าหาบอส...")
-                end
-            elseif root.Anchored or root.AssemblyLinearVelocity.Magnitude > 25 then
-                raid.combatReady = false
-                stableSince = nil
-                raidSay("พักสกิล: รอให้ตัวนิ่งใกล้บอส...")
-            else
-                if not raid.combatReady then
-                    if actionAnimationPlaying(character) then
-                        stableSince = nil
-                    else
-                        stableSince = stableSince or now
-                        if now - stableSince >= 1 then raid.combatReady = true end
+                warn(string.format("Raid target [%s]: %s (%s) HP %.0f/%.0f • เหลือลูกน้อง/ลูกบอล %d",
+                    kind, target.model.Name, target.humanoid.DisplayName,
+                    health, target.humanoid.MaxHealth, addCount))
+            end
+            if health < track.hp - 0.5 then
+                track.hp = health
+                track.since = now
+            elseif health > track.hp then
+                track.hp = health
+            end
+            -- ลูกน้อง/ลูกบอลที่ตีเท่าไรก็ไม่ลด (ตีไม่ได้) ข้ามไป 30 วินาที กันค้าง
+            if kind ~= "บอส" and now - track.since > 15 then
+                raid.ignore[target.humanoid] = now + 30
+                warn("Raid: ข้ามเป้าหมายที่ไม่ลดเลือด " .. target.model.Name)
+                continue
+            end
+
+            local hoverPart, label = target.part, kind
+            if raid.hover then
+                if kind == "บอส" then
+                    if not bossStale.hp or health < bossStale.hp - 0.5 then
+                        bossStale.hp = health
+                        bossStale.since = now
                     end
+                    -- บอสไม่ลดเลือดนาน = อาจมีโล่จากลูกบอลที่ไม่ใช่ Humanoid: ลองตีวัตถุคล้ายลูกบอลสลับกัน
+                    if now - bossStale.since > 15 then
+                        if now - orbCacheAt > 5 then
+                            orbCache = findOrbCandidates(root)
+                            orbCacheAt = now
+                        end
+                        if #orbCache > 0 then
+                            local index = math.floor((now - bossStale.since - 15) / 8) % #orbCache + 1
+                            hoverPart = orbCache[index].part
+                            label = "วัตถุ " .. orbCache[index].name
+                        end
+                    end
+                else
+                    bossStale.hp = nil
                 end
-                if raid.combatReady then
-                    raidSay(string.format("สู้บอส: %s\nHP: %.0f • รอบที่ %d",
-                        boss.model.Name, boss.humanoid.Health, raid.rounds + 1))
-                    useDuckSkill(character, root, boss)
+                raid.hoverPart = hoverPart
+                readySince = readySince or now
+                if now - readySince >= 0.6 then raid.combatReady = true end
+            else
+                raid.hoverPart = nil
+                if root.Anchored then
+                    raid.combatReady = false
+                    readySince = nil
+                else
+                    readySince = readySince or now
+                    if now - readySince >= 1 then raid.combatReady = true end
                 end
+            end
+
+            if raid.combatReady then
+                raidSay(string.format("สู้: %s • %s\nHP %.0f/%.0f • ลูกน้อง/ลูกบอลเหลือ %d • รอบที่ %d",
+                    label, target.model.Name, health, target.humanoid.MaxHealth, addCount, raid.rounds + 1))
+                useDuckSkill(character, root, target)
+            else
+                raidSay("เข้าตำแหน่งเหนือหัวเป้าหมาย: " .. target.model.Name)
             end
         else
             raid.combatReady = false
+            raid.hoverPart = nil
+            readySince = nil
             releaseSkillKeys()
             missingSince = missingSince or now
-            raidSay("บอสหายไป รอหน้า Victory...")
+            raidSay("ไม่พบบอส/ลูกน้อง รอหน้า Victory...")
             if now - missingSince > 20 then break end
         end
         task.wait(0.25)
     end
-    raid.fighting = false
-    raid.combatReady = false
-    releaseSkillKeys()
+    endFight()
     if not alive() then return "cancel" end
 
     -- 7) หน้า Victory: กดปิด
@@ -1952,8 +2115,8 @@ end
 
 local function startRaid(autoMode)
     if raid.running then raidStop("หยุดระบบ Raid แล้ว") return end
-    if auto or flight or duck.enabled then
-        raidStatus.Text = "ปิด AUTO / Flight / Duck ก่อนใช้ระบบ Raid ครับ"
+    if auto or duck.enabled then
+        raidStatus.Text = "ปิด AUTO เป้าหมาย / Duck ก่อนใช้ระบบ Raid ครับ (เปิด Flight ได้)"
         return
     end
     if not raid.promptPose or not raid.prompt then
@@ -2045,6 +2208,12 @@ raidBossName.FocusLost:Connect(function()
 end)
 raidButton.Activated:Connect(function() startRaid(false) end)
 raidAutoButton.Activated:Connect(function() startRaid(true) end)
+raidWarpToggle.Activated:Connect(function()
+    raid.hover = not raid.hover
+    raidWarpToggle.Text = raid.hover and "โหมดสู้: FULL AUTO เกาะเหนือหัวเป้าหมาย (กดเพื่อสลับ)"
+        or "โหมดสู้: MANUAL ยิงสกิลอย่างเดียว บินเองได้ (กดเพื่อสลับ)"
+    raidWarpToggle.BackgroundColor3 = raid.hover and colors.green or colors.active
+end)
 raidTab.Activated:Connect(function() showPage("raid") end)
 
 local function autoStep(entries)
