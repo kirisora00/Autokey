@@ -1,4 +1,4 @@
--- Autokey v2.28 (Raid: retry when boss 'Already Spawned'): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.29 (Gacha auto-roll): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -60,6 +60,8 @@ skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
     fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
     hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false, bbCache = {}, bbAt = -math.huge, bbVirtual = {}, warned = {}, buff = true}
+local gachaUI = {}
+local gacha = {prompt = nil, promptPose = nil, running = false, token = 0, pulls = 0, held = nil}
 local dungeon = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0, rounds = 0, height = 15, holdPart = nil, stop = nil}
 
 local colors = {
@@ -139,10 +141,10 @@ local flightTab = create("TextButton", {
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 create("TextLabel", {
-    Position = UDim2.fromOffset(15, 332), Size = UDim2.fromOffset(137, 56),
-    BackgroundTransparency = 1, Text = "AUTOKEY\nv2.28 · Client\n− ยุบ   /   X ปิดระบบ",
+    Position = UDim2.fromOffset(15, 360), Size = UDim2.fromOffset(137, 34),
+    BackgroundTransparency = 1, Text = "AUTOKEY v2.29 · Client\n− ยุบ  /  X ปิดระบบ",
     TextColor3 = colors.muted, Font = Enum.Font.Gotham,
-    TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+    TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 
 local duckTab = create("TextButton", {
@@ -552,6 +554,10 @@ local dungeonStatus = create("TextLabel", {
 
 local function showPage(page)
     currentPage = page
+    if gachaUI.page then
+        gachaUI.page.Visible = page == "gacha"
+        gachaUI.tab.BackgroundColor3 = page == "gacha" and colors.active or colors.sidebar
+    end
     dungeonPage.Visible = page == "dungeon"
     dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.sidebar
     raidPage.Visible = page == "raid"
@@ -2546,7 +2552,7 @@ end
 
 local function startRaid(autoMode)
     if raid.running then raidStop("หยุดระบบ Raid แล้ว") return end
-    if auto or duck.enabled or dungeon.running then
+    if auto or duck.enabled or dungeon.running or gacha.running then
         raidStatus.Text = "ปิด AUTO เป้าหมาย / Duck / Dungeon ก่อนใช้ระบบ Raid ครับ (เปิด Flight ได้)"
         return
     end
@@ -3387,7 +3393,7 @@ end
 
 local function startDungeon(autoMode)
     if dungeon.running then dungeonStop("หยุดระบบ Dungeon แล้ว") return end
-    if auto or duck.enabled or raid.running then
+    if auto or duck.enabled or raid.running or gacha.running then
         dungeonStatus.Text = "ปิด AUTO เป้าหมาย / Duck / Raid ก่อนใช้ระบบ Dungeon ครับ (เปิด Flight ได้)"
         return
     end
@@ -3537,6 +3543,333 @@ dungeonSkipButton.Activated:Connect(function()
     end)
 end)
 dungeonTab.Activated:Connect(function() showPage("dungeon") end)
+
+local function initGacha()
+local gachaPage = makePage()
+gachaPage.Visible = false
+gachaUI.page = gachaPage
+local gachaTab = create("TextButton", {
+    Position = UDim2.fromOffset(10, 320), Size = UDim2.fromOffset(145, 34),
+    Text = "Gacha / สุ่มของ", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
+}, sidebar)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, gachaTab)
+gachaUI.tab = gachaTab
+local function gachaRow(y, text, default)
+    create("TextLabel", {
+        Position = UDim2.fromOffset(0, y), Size = UDim2.fromOffset(290, 28),
+        BackgroundTransparency = 1, TextColor3 = colors.muted,
+        TextSize = 13, Text = text, TextXAlignment = Enum.TextXAlignment.Left,
+    }, gachaPage)
+    return create("TextBox", {
+        Position = UDim2.new(1, -90, 0, y), Size = UDim2.fromOffset(90, 28),
+        BackgroundColor3 = colors.active, BorderSizePixel = 0,
+        TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+        Text = default, ClearTextOnFocus = false,
+    }, gachaPage)
+end
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
+    Text = "Gacha / สุ่มของอัตโนมัติ", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 20,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, gachaPage)
+local bindGachaPrompt = create("TextButton", {
+    Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 0, 30),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 13, Text = "1) บันทึกจุดกด E (ยืนข้างโต๊ะ Chest / Open)",
+}, gachaPage)
+local gachaAmount = gachaRow(70, "ปุ่มที่กด: Open x ? (5 / 10 / 15)", "15")
+local gachaMax = gachaRow(102, "จำนวนครั้งสูงสุด (0 = จนกว่าเพชรหมด)", "0")
+local gachaReserve = gachaRow(134, "เก็บเพชรไว้อย่างน้อย (หยุดเมื่อต่ำกว่า)", "0")
+local gachaButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 172), Size = UDim2.new(1, 0, 0, 36),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 15, Text = "GACHA AUTO: OFF — กดเพื่อสุ่มต่อเนื่อง",
+}, gachaPage)
+local gachaStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 216), Size = UDim2.new(1, 0, 0, 158),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "วิธีตั้งค่า: ยืนข้างโต๊ะที่กด E แล้วขึ้น \"Chest / Open\" กดข้อ 1 แล้วกดปุ่มเริ่ม\nระบบจะสุ่มไปเรื่อยๆ จนเพชรหมด (อ่านจากเพชรมุมซ้ายบน) หรือกดปุ่มเดิมเพื่อหยุด",
+}, gachaPage)
+
+-- ===== Gacha auto: กด E ค้าง (Chest / Open) -> กดปุ่ม Open x15 ซ้ำจนเพชรหมด =====
+local function parseAbbrev(text)
+    text = stripRichText(text):gsub(",", ""):gsub("%s", "")
+    local number, suffix = text:match("^([%d%.]+)([KkMmBbTt]?)")
+    number = tonumber(number)
+    if not number then return nil end
+    local mult = {k = 1e3, m = 1e6, b = 1e9, t = 1e12}
+    return number * (mult[suffix:lower()] or 1)
+end
+
+local function readDiamonds()
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj:IsA("TextLabel") and obj.Name == "DiamondText" and not obj:IsDescendantOf(gui) then
+            return parseAbbrev(obj.Text), obj.Text
+        end
+    end
+    return nil
+end
+
+local function findGachaPrompt(root)
+    local closest, distance = nil, math.huge
+    for _, object in ipairs(workspace:GetDescendants()) do
+        if object:IsA("ProximityPrompt") and normalizeDuck(object.ObjectText) == "chest" then
+            local position = duckPromptPosition(object)
+            if position then
+                local d = (root.Position - position).Magnitude
+                if d <= object.MaxActivationDistance + 2 and d < distance then
+                    closest, distance = object, d
+                end
+            end
+        end
+    end
+    return closest, distance
+end
+
+local function findGachaWindow(amount)
+    local wanted = "openx" .. amount
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj:IsA("GuiButton") and not obj:IsDescendantOf(gui) and guiVisible(obj)
+            and normalizeDuck(buttonText(obj)) == wanted then
+            local title
+            local scope = obj.Parent
+            for _ = 1, 6 do
+                if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+                for _, label in ipairs(scope:GetDescendants()) do
+                    if label:IsA("TextLabel") and normalizeDuck(label.Text) == "randomitems" then
+                        title = label
+                        break
+                    end
+                end
+                if title then break end
+                scope = scope.Parent
+            end
+            if title then return {button = obj, label = title, scope = scope} end
+        end
+    end
+    return nil
+end
+
+-- ลายเซ็นของหน้าต่าง (ข้อความ/รูป/จำนวนวัตถุ) ใช้ตรวจว่ากดสุ่มติดจริง
+local function gachaSignature(win)
+    local parts = {}
+    local scope = win.scope
+    if scope and scope.Parent and not scope.Parent:IsA("ScreenGui") then scope = scope.Parent end
+    local count = 0
+    for _, obj in ipairs(scope:GetDescendants()) do
+        count += 1
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            table.insert(parts, obj.Text)
+        elseif obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+            table.insert(parts, obj.Image)
+        end
+    end
+    return count .. "|" .. table.concat(parts, "¦")
+end
+
+local function gachaNotice()
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj:IsA("TextLabel") and not obj:IsDescendantOf(gui) and obj.Text ~= "" and guiVisible(obj) then
+            local text = normalizeDuck(stripRichText(obj.Text))
+            if text:find("notenough", 1, true) or text:find("insufficient", 1, true)
+                or text:find("inventoryfull", 1, true) or text:find("bagfull", 1, true) then
+                return stripRichText(obj.Text)
+            end
+        end
+    end
+    return nil
+end
+
+local function gachaSay(text) gachaStatus.Text = text end
+local function endGachaHold()
+    local prompt = gacha.held
+    gacha.held = nil
+    if prompt then pcall(function() prompt:InputHoldEnd() end) end
+end
+
+local function gachaStop(message)
+    gacha.token += 1
+    gacha.running = false
+    endGachaHold()
+    gachaButton.Text = "GACHA AUTO: OFF — กดเพื่อสุ่มต่อเนื่อง"
+    gachaButton.BackgroundColor3 = colors.blue
+    if message then gachaStatus.Text = message end
+end
+
+local function startGacha()
+    if gacha.running then gachaStop("หยุดสุ่มแล้ว (สุ่มไป " .. gacha.pulls .. " ครั้ง)") return end
+    if auto or duck.enabled or raid.running or dungeon.running then
+        gachaStatus.Text = "ปิด AUTO เป้าหมาย / Duck / Raid / Dungeon ก่อนใช้ระบบสุ่มครับ (เปิด Flight ได้)"
+        return
+    end
+    if not gacha.promptPose then
+        gachaStatus.Text = "กดบันทึกจุดกด E (ข้อ 1) ก่อนครับ"
+        return
+    end
+    local amount = math.floor(tonumber(gachaAmount.Text) or 15)
+    if amount ~= 5 and amount ~= 10 and amount ~= 15 then
+        gachaStatus.Text = "ปุ่มที่กดต้องเป็น 5, 10 หรือ 15"
+        return
+    end
+    local maxPulls = math.max(0, math.floor(tonumber(gachaMax.Text) or 0))
+    local reserve = math.max(0, tonumber(gachaReserve.Text) or 0)
+    local price = amount * 10
+    gacha.token += 1
+    local token = gacha.token
+    gacha.running = true
+    gacha.pulls = 0
+    gachaButton.Text = "GACHA AUTO: ON — กดเพื่อหยุด"
+    gachaButton.BackgroundColor3 = colors.green
+
+    task.spawn(function()
+        local function alive() return running and gacha.running and gacha.token == token end
+        local function pause(seconds)
+            local untilTime = os.clock() + seconds
+            while alive() and os.clock() < untilTime do task.wait(0.1) end
+            return alive()
+        end
+        local ok, err = pcall(function()
+            local method, misses, switches, reopens = 1, 0, 0, 0
+            local function openWindow()
+                local character, root = duckCharacter()
+                if not character then return nil, "ตัวละครไม่พร้อม" end
+                gachaSay("วาร์ปไปจุดกด E ของโต๊ะสุ่ม...")
+                raidMoveTo(character, root, gacha.promptPose)
+                if not pause(0.8) then return nil end
+                local prompt
+                local deadline = os.clock() + 6
+                while alive() and os.clock() < deadline do
+                    local _, nowRoot = duckCharacter()
+                    if nowRoot then prompt = findGachaPrompt(nowRoot) end
+                    if prompt then break end
+                    task.wait(0.3)
+                end
+                if not alive() then return nil end
+                if not prompt then return nil, "ไม่พบปุ่ม E: Chest / Open ที่จุดที่บันทึก\nบันทึกจุดกด E ใหม่" end
+                gachaSay("กดค้าง E: เปิดหน้าสุ่ม...")
+                gacha.held = prompt
+                prompt:InputHoldBegin()
+                if not pause(math.max(0, prompt.HoldDuration) + 0.25) then return nil end
+                endGachaHold()
+                local win
+                deadline = os.clock() + 6
+                while alive() and os.clock() < deadline do
+                    win = findGachaWindow(amount)
+                    if win then break end
+                    task.wait(0.2)
+                end
+                if not alive() then return nil end
+                if not win then return nil, "ไม่พบหน้าต่างสุ่ม/ปุ่ม Open x" .. amount .. " ภายใน 6 วินาที" end
+                return win
+            end
+
+            while alive() do
+                if auto or duck.enabled or raid.running or dungeon.running then
+                    gachaStop("หยุดสุ่มเพราะเปิด AUTO/Duck/Raid/Dungeon อยู่")
+                    return
+                end
+                local diamonds, diamondText = readDiamonds()
+                if diamonds and diamonds < price + reserve then
+                    gachaStop(string.format("หยุด: เพชรเหลือ %s (ต่ำกว่าที่ต้องใช้ %d) • สุ่มไปทั้งหมด %d ครั้ง",
+                        tostring(diamondText), price + reserve, gacha.pulls))
+                    return
+                end
+                if maxPulls > 0 and gacha.pulls >= maxPulls then
+                    gachaStop("ครบ " .. gacha.pulls .. " ครั้งตามที่ตั้งไว้ หยุดแล้ว")
+                    return
+                end
+                local win = findGachaWindow(amount)
+                if not win then
+                    reopens += 1
+                    if reopens > 4 then
+                        gachaStop("หน้าต่างสุ่มปิดและเปิดใหม่ไม่ได้หลายครั้ง หยุด • สุ่มไป " .. gacha.pulls .. " ครั้ง")
+                        return
+                    end
+                    local opened, message = openWindow()
+                    if not alive() then return end
+                    if not opened then gachaStop(message or "เปิดหน้าสุ่มไม่สำเร็จ") return end
+                    win = opened
+                end
+                local before = gachaSignature(win)
+                if method == 1 then pressGuiButton(win.button, false) else pressGuiButton(win.button, true) end
+                local changed = false
+                for _ = 1, 10 do
+                    if not pause(0.2) then return end
+                    if gachaSignature(win) ~= before then changed = true break end
+                end
+                local notice = gachaNotice()
+                if notice then
+                    gachaStop("หยุด: เกมแจ้ง \"" .. notice .. "\" • สุ่มไป " .. gacha.pulls .. " ครั้ง")
+                    return
+                end
+                if changed then
+                    gacha.pulls += 1
+                    misses = 0
+                    reopens = 0
+                else
+                    misses += 1
+                    if misses >= 2 then
+                        misses = 0
+                        switches += 1
+                        method = 3 - method
+                        if switches >= 3 then
+                            gachaStop("กดปุ่ม Open x" .. amount .. " แล้วหน้าจอไม่เปลี่ยน (เพชร/ช่องเก็บของหมด หรือกดไม่ติด) หยุด • สุ่มไป " .. gacha.pulls .. " ครั้ง")
+                            return
+                        end
+                    end
+                end
+                gachaSay(string.format("กำลังสุ่ม Open x%d\nสุ่มแล้ว %d ครั้ง (%d ชิ้น) • เพชร %s\nวิธีกด: %s",
+                    amount, gacha.pulls, gacha.pulls * amount, tostring(diamondText or "?"),
+                    method == 1 and "สัญญาณปุ่ม" or "คลิกเมาส์จริง"))
+                if not pause(0.3) then return end
+            end
+        end)
+        endGachaHold()
+        if not ok then
+            gachaStop("ระบบสุ่มหยุดเพราะเกิด Error ดู Console")
+            warn("Gacha Auto:", err)
+        end
+    end)
+end
+
+bindGachaPrompt.Activated:Connect(function()
+    local _, root = duckCharacter()
+    if not root then gachaStatus.Text = "รอตัวละครพร้อม และลงจากที่นั่งก่อนครับ" return end
+    local prompt, distance = findGachaPrompt(root)
+    if not prompt then
+        gachaStatus.Text = "ไม่พบปุ่ม E: Chest / Open ในระยะ\nยืนให้เห็นปุ่มแล้วกดใหม่"
+        return
+    end
+    gacha.prompt = prompt
+    gacha.promptPose = root.CFrame
+    bindGachaPrompt.Text = "1) บันทึกจุดกด E แล้ว — กดเพื่อบันทึกใหม่"
+    gachaStatus.Text = string.format("บันทึกจุดกด E แล้ว • ระยะ %.1f studs • กดค้าง %.1f วินาที",
+        distance, prompt.HoldDuration)
+end)
+gachaAmount.FocusLost:Connect(function()
+    local n = math.floor(tonumber(gachaAmount.Text) or 15)
+    if n ~= 5 and n ~= 10 then n = 15 end
+    gachaAmount.Text = tostring(n)
+end)
+gachaMax.FocusLost:Connect(function()
+    gachaMax.Text = tostring(math.max(0, math.floor(tonumber(gachaMax.Text) or 0)))
+end)
+gachaReserve.FocusLost:Connect(function()
+    gachaReserve.Text = tostring(math.max(0, math.floor(tonumber(gachaReserve.Text) or 0)))
+end)
+gachaButton.Activated:Connect(startGacha)
+gachaTab.Activated:Connect(function() showPage("gacha") end)
+end
+initGacha()
+
 
 
 local function autoStep(entries)
