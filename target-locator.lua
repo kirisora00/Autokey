@@ -1,4 +1,4 @@
--- Autokey v2.36 (Craft Tracker: fix stutter - cache HUD currency labels, scan only while the Craft tab is open): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.37 (Craft Tracker: fix severe stutter - stop calling GetDescendants() once per row/item): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.36",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.37",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.36" or "Anti-AFK: OFF  •  v2.36")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.37" or "Anti-AFK: OFF  •  v2.37")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -4120,12 +4120,19 @@ local function craftItemName(scope, materialsLabel, craftButton)
 end
 
 -- จับคู่ป้ายชื่อวัตถุดิบ + ป้าย "ปัจจุบัน/ต้องการ" โดยดูว่าอยู่แถวเดียวกัน (Y ใกล้กัน) แล้วชื่ออยู่ซ้ายมือ
+-- เดินไล่ GetDescendants() แค่ครั้งเดียว (เดิมเรียกซ้ำในลูปทีละแถว ทำให้กระตุกหนักเวลาหน้าต่างมีของเยอะๆ
+-- เช่นหน้ากระเป๋า) แล้วแยกเป็น "ป้ายตัวเลข" กับ "ป้ายชื่อที่เป็นไปได้" ไว้ล่วงหน้า ก่อนจับคู่กัน
 local function scanCraftMaterials(scope, materialsLabel)
-    local amounts = {}
+    local amounts, nameCandidates = {}, {}
     for _, obj in ipairs(scope:GetDescendants()) do
         if obj:IsA("TextLabel") and guiVisible(obj) and obj ~= materialsLabel then
-            local text = stripRichText(obj.Text):gsub("%s", "")
-            if text:match(CRAFT_AMOUNT_PATTERN) then table.insert(amounts, obj) end
+            local text = stripRichText(obj.Text)
+            local trimmed = text:gsub("%s", "")
+            if trimmed:match(CRAFT_AMOUNT_PATTERN) then
+                table.insert(amounts, obj)
+            elseif text ~= "" then
+                table.insert(nameCandidates, obj)
+            end
         end
     end
     local rows = {}
@@ -4133,17 +4140,11 @@ local function scanCraftMaterials(scope, materialsLabel)
         local ay = amountLabel.AbsolutePosition.Y + amountLabel.AbsoluteSize.Y / 2
         local ax = amountLabel.AbsolutePosition.X
         local nameLabel, nameX
-        for _, obj in ipairs(scope:GetDescendants()) do
-            if obj:IsA("TextLabel") and guiVisible(obj) and obj ~= amountLabel and obj ~= materialsLabel then
-                local text = stripRichText(obj.Text)
-                local trimmed = text:gsub("%s", "")
-                if text ~= "" and not trimmed:match(CRAFT_AMOUNT_PATTERN) then
-                    local oy = obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2
-                    if math.abs(oy - ay) <= 10 and obj.AbsolutePosition.X < ax then
-                        if not nameX or obj.AbsolutePosition.X > nameX then
-                            nameLabel, nameX = obj, obj.AbsolutePosition.X
-                        end
-                    end
+        for _, obj in ipairs(nameCandidates) do
+            local oy = obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2
+            if math.abs(oy - ay) <= 10 and obj.AbsolutePosition.X < ax then
+                if not nameX or obj.AbsolutePosition.X > nameX then
+                    nameLabel, nameX = obj, obj.AbsolutePosition.X
                 end
             end
         end
@@ -4228,31 +4229,32 @@ local function findInventoryWindow()
 end
 
 -- จับคู่ป้ายจำนวน "xN" กับชื่อไอเทมที่อยู่ใต้ไอคอนเดียวกัน (ชื่ออยู่ใต้ป้ายจำนวน ในกรอบ X ใกล้กัน)
+-- จุดที่ทำให้กระตุกหนักตอนเปิดกระเป๋า: ของเดิมเรียก scope:GetDescendants() ใหม่ทุกครั้งที่จับคู่ 1 ชิ้น
+-- (กระเป๋ามีของเป็นสิบเป็นร้อยชิ้น = ไล่ทั้งต้นไม้ GUI ซ้ำเป็นร้อยรอบ) ตอนนี้ไล่ครั้งเดียวแล้วจับคู่จากรายการที่เก็บไว้
 local function scanInventoryCounts(scope)
     local counts = {}
-    local countLabels = {}
+    local countLabels, nameCandidates = {}, {}
     for _, obj in ipairs(scope:GetDescendants()) do
         if obj:IsA("TextLabel") and guiVisible(obj) then
-            local text = stripRichText(obj.Text):gsub("%s", "")
-            if text:match("^[Xx]%d[%d,]*$") then table.insert(countLabels, obj) end
+            local text = stripRichText(obj.Text)
+            local trimmed = text:gsub("%s", "")
+            if trimmed:match("^[Xx]%d[%d,]*$") then
+                table.insert(countLabels, obj)
+            elseif text ~= "" then
+                table.insert(nameCandidates, obj)
+            end
         end
     end
     for _, countLabel in ipairs(countLabels) do
         local cx = countLabel.AbsolutePosition.X + countLabel.AbsoluteSize.X / 2
         local cy = countLabel.AbsolutePosition.Y
         local nameLabel, bestDist
-        for _, obj in ipairs(scope:GetDescendants()) do
-            if obj:IsA("TextLabel") and guiVisible(obj) and obj ~= countLabel then
-                local text = stripRichText(obj.Text)
-                local trimmed = text:gsub("%s", "")
-                if text ~= "" and not trimmed:match("^[Xx]%d[%d,]*$") then
-                    local ox = obj.AbsolutePosition.X + obj.AbsoluteSize.X / 2
-                    local oy = obj.AbsolutePosition.Y
-                    if oy >= cy and oy - cy < 60 and math.abs(ox - cx) < 50 then
-                        local dist = (oy - cy) + math.abs(ox - cx)
-                        if not bestDist or dist < bestDist then nameLabel, bestDist = obj, dist end
-                    end
-                end
+        for _, obj in ipairs(nameCandidates) do
+            local ox = obj.AbsolutePosition.X + obj.AbsoluteSize.X / 2
+            local oy = obj.AbsolutePosition.Y
+            if oy >= cy and oy - cy < 60 and math.abs(ox - cx) < 50 then
+                local dist = (oy - cy) + math.abs(ox - cx)
+                if not bestDist or dist < bestDist then nameLabel, bestDist = obj, dist end
             end
         end
         if nameLabel then
