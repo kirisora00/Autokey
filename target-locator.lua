@@ -1,4 +1,4 @@
--- Autokey v2.40 (Raid/Dungeon: optional buff-weapon swap before fight - equip 2nd weapon, tap its skill, switch back to main): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.41 (fix: buff-weapon toggle button not responding to click - added redundant listener + debounce + error surfacing): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.40",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.41",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.40" or "Anti-AFK: OFF  •  v2.40")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.41" or "Anti-AFK: OFF  •  v2.41")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -635,14 +635,25 @@ local raidStatus = create("TextLabel", {
             raidBuffWeaponButton.BackgroundColor3 = colors.active
         end
     end
-    raidBuffWeaponButton.Activated:Connect(function()
-        if normalizeDuck(raidBuffWeapon.Text) == "" then
-            raidBuffWeaponButton.Text = "อาวุธเสริมบัฟ: ใส่ชื่ออาวุธก่อนครับ"
-            return
-        end
-        raid.buffWeapon = not raid.buffWeapon
-        refreshBuffWeaponButton()
-    end)
+    -- กันชนขอบระหว่าง Activated กับ MouseButton1Click (บางตัวรันอาจยิงแค่ตัวใดตัวหนึ่ง)
+    -- ใช้ debounce กันไม่ให้สลับ ON/OFF สองครั้งซ้อนถ้ายิงทั้งคู่จากคลิกเดียวกัน
+    local buffWeaponClickBusy = false
+    local function onBuffWeaponButtonPressed()
+        if buffWeaponClickBusy then return end
+        buffWeaponClickBusy = true
+        task.defer(function() buffWeaponClickBusy = false end)
+        local ok, err = pcall(function()
+            if normalizeDuck(raidBuffWeapon.Text) == "" then
+                raidBuffWeaponButton.Text = "อาวุธเสริมบัฟ: ใส่ชื่ออาวุธก่อนครับ"
+                return
+            end
+            raid.buffWeapon = not raid.buffWeapon
+            refreshBuffWeaponButton()
+        end)
+        if not ok then warn("Raid: ปุ่มอาวุธเสริมบัฟ error:", err) end
+    end
+    raidBuffWeaponButton.Activated:Connect(onBuffWeaponButtonPressed)
+    raidBuffWeaponButton.MouseButton1Click:Connect(onBuffWeaponButtonPressed)
     raidBuffWeapon.FocusLost:Connect(refreshBuffWeaponButton)
     raidBuffWeaponKey.FocusLost:Connect(function()
         local key = raidBuffWeaponKey.Text:gsub("%s", "")
