@@ -1,4 +1,4 @@
--- Autokey v2.32 (Craft Tracker: auto-capture material requirements): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.33 (Craft Tracker: fix scope leaking HUD health/EXP into the list): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -4075,26 +4075,27 @@ end
 
 local CRAFT_AMOUNT_PATTERN = "^[%d,%.]+[KkMmBbTt]?/[%d,%.]+[KkMmBbTt]?$"
 
-local function findCraftWindow()
-    for _, label in ipairs(playerGui:GetDescendants()) do
-        if label:IsA("TextLabel") and not label:IsDescendantOf(gui) and guiVisible(label)
-            and normalizeDuck(stripRichText(label.Text)) == "materialsrequired" then
-            local scope = label.Parent
-            for _ = 1, 5 do
-                if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
-                if scope.Parent and scope.Parent:IsA("ScreenGui") then break end
-                scope = scope.Parent
-            end
-            if scope then return label, scope end
+local function findCraftButton(scope)
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("GuiButton") and guiVisible(obj) and normalizeDuck(buttonText(obj)) == "craft" then
+            return obj
         end
     end
     return nil
 end
 
-local function findCraftButton(scope)
-    for _, obj in ipairs(scope:GetDescendants()) do
-        if obj:IsA("GuiButton") and guiVisible(obj) and normalizeDuck(buttonText(obj)) == "craft" then
-            return obj
+-- ไต่ขึ้นไปแค่พอให้เจอทั้งป้าย MATERIALS REQUIRED และปุ่ม Craft อยู่ในกรอบเดียวกัน (กรอบเล็กสุดที่ครอบทั้งคู่)
+-- ถ้าไต่ขึ้นไปจนสุด ScreenGui (เช่น HUD หลักที่ครอบทั้งจอ รวม Health/EXP) จะทำให้จับข้อมูลอื่นที่ไม่เกี่ยวมาปนด้วย
+local function findCraftWindow()
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if label:IsA("TextLabel") and not label:IsDescendantOf(gui) and guiVisible(label)
+            and normalizeDuck(stripRichText(label.Text)) == "materialsrequired" then
+            local scope = label.Parent
+            for _ = 1, 6 do
+                if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+                if findCraftButton(scope) then return label, scope end
+                scope = scope.Parent
+            end
         end
     end
     return nil
