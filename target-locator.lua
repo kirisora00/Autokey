@@ -1,4 +1,4 @@
--- Autokey v2.29 (Gacha auto-roll): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.30 (Anti-AFK): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -27,6 +27,7 @@ local targets = {
 local FOLLOW_DISTANCE = 9 -- ห่างจากเป้าหมายเกินกี่ studs ถึงจะวาร์ปตามใหม่
 local selected = 2
 local running = true
+local antiAfk = {enabled = true}
 local collapsed = false
 local auto = false
 local locked = nil
@@ -38,6 +39,42 @@ local nextId = 0
 
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+
+-- ===== Anti-AFK: กันโดนเตะเพราะไม่ได้ขยับ =====
+-- วิธีหลัก: Roblox จะยิง Players.LocalPlayer.Idled ก่อนเตะ AFK ~20-30 วินาที
+-- เราจำลองว่ามีคนกดปุ่ม/ขยับกล้องผ่าน VirtualUser (มาตรฐานที่ใช้กันทั่วไป)
+-- วิธีสำรอง: เผื่อ Idled ไม่ยิง (ตัวรันบางตัว/สถานการณ์บางแบบ) ให้แตะปุ่มกระโดดเองทุก ~90 วินาทีถ้าไม่มีอินพุตจริงเข้ามาเลย
+local lastRealInput = os.clock()
+UserInputService.InputBegan:Connect(function(_, processed)
+    if not processed then lastRealInput = os.clock() end
+end)
+player.Idled:Connect(function()
+    if not antiAfk.enabled then return end
+    local ok, virtualUser = pcall(function() return game:GetService("VirtualUser") end)
+    if ok and virtualUser then
+        pcall(function()
+            virtualUser:CaptureController()
+            virtualUser:ClickButton2(Vector2.new())
+        end)
+    end
+end)
+task.spawn(function()
+    while running do
+        task.wait(15)
+        if antiAfk.enabled and os.clock() - lastRealInput > 90 then
+            local okInput, manager = pcall(function() return game:GetService("VirtualInputManager") end)
+            if okInput and manager then
+                pcall(function()
+                    manager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                    task.wait(0.05)
+                    manager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+                end)
+            end
+            lastRealInput = os.clock() -- กันสแปมถ้าโดน error ซ้ำ
+        end
+    end
+end)
+
 local currentPage = "target"
 local flight = nil
 local flySpeed = 70
@@ -140,12 +177,18 @@ local flightTab = create("TextButton", {
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
-create("TextLabel", {
-    Position = UDim2.fromOffset(15, 360), Size = UDim2.fromOffset(137, 34),
-    BackgroundTransparency = 1, Text = "AUTOKEY v2.29 · Client\n− ยุบ  /  X ปิดระบบ",
-    TextColor3 = colors.muted, Font = Enum.Font.Gotham,
-    TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+local antiAfkButton = create("TextButton", {
+    Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
+    BackgroundColor3 = colors.green, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.30",
 }, sidebar)
+create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
+antiAfkButton.Activated:Connect(function()
+    antiAfk.enabled = not antiAfk.enabled
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.30" or "Anti-AFK: OFF  •  v2.30")
+    antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
+end)
 
 local duckTab = create("TextButton", {
     Position = UDim2.fromOffset(10, 160), Size = UDim2.fromOffset(145, 34),
