@@ -1,4 +1,4 @@
--- Autokey v2.31 (UI overhaul: draggable window, scrollable menu, hide-to-F1): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.32 (Craft Tracker: auto-capture material requirements): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -96,7 +96,7 @@ skills.castTracks = {}
 local raid = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0,
     fighting = false, combatReady = false, auto = false, rounds = 0, held = nil, stop = nil,
     hover = true, bossEntry = nil, hoverPart = nil, hoverOffset = 10, bossHeight = 30, ignore = {}, orbFallback = false, bbCache = {}, bbAt = -math.huge, bbVirtual = {}, warned = {}, buff = true}
-local gachaUI = {}
+local extraTabs = {}
 local gacha = {prompt = nil, promptPose = nil, running = false, token = 0, pulls = 0, held = nil}
 local dungeon = {prompt = nil, promptPose = nil, ringPose = nil, running = false, token = 0, rounds = 0, height = 15, holdPart = nil, stop = nil}
 
@@ -662,9 +662,13 @@ local dungeonStatus = create("TextLabel", {
 
 local function showPage(page)
     currentPage = page
-    if gachaUI.page then
-        gachaUI.page.Visible = page == "gacha"
-        gachaUI.tab.BackgroundColor3 = page == "gacha" and colors.active or colors.tab
+    if extraTabs.gachaPage then
+        extraTabs.gachaPage.Visible = page == "gacha"
+        extraTabs.gachaTab.BackgroundColor3 = page == "gacha" and colors.active or colors.tab
+    end
+    if extraTabs.craftPage then
+        extraTabs.craftPage.Visible = page == "craft"
+        extraTabs.craftTab.BackgroundColor3 = page == "craft" and colors.active or colors.tab
     end
     dungeonPage.Visible = page == "dungeon"
     dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.tab
@@ -3673,7 +3677,7 @@ dungeonTab.Activated:Connect(function() showPage("dungeon") end)
 local function initGacha()
 local gachaPage = makePage()
 gachaPage.Visible = false
-gachaUI.page = gachaPage
+extraTabs.gachaPage = gachaPage
 local gachaTab = create("TextButton", {
     LayoutOrder = 60, Size = UDim2.fromOffset(145, 34),
     Text = "Gacha / สุ่มของ", TextColor3 = Color3.new(1, 1, 1),
@@ -3681,7 +3685,7 @@ local gachaTab = create("TextButton", {
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
 }, navList)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, gachaTab)
-gachaUI.tab = gachaTab
+extraTabs.gachaTab = gachaTab
 local function gachaRow(y, text, default)
     create("TextLabel", {
         Position = UDim2.fromOffset(0, y), Size = UDim2.fromOffset(290, 28),
@@ -3995,6 +3999,298 @@ gachaButton.Activated:Connect(startGacha)
 gachaTab.Activated:Connect(function() showPage("gacha") end)
 end
 initGacha()
+
+;(function()
+local craftPage = makePage()
+craftPage.Visible = false
+extraTabs.craftPage = craftPage
+local craftTab = create("TextButton", {
+    LayoutOrder = 70, Size = UDim2.fromOffset(145, 34),
+    Text = "Craft / สูตรคราฟต์", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, craftTab)
+extraTabs.craftTab = craftTab
+
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+    Text = "Craft Tracker / รายการที่ต้องคราฟต์", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 18,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, craftPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 34),
+    BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
+    TextSize = 12, Text = "เปิดหน้าต่างคราฟต์ของพลัง/ไอเทมที่ต้องการในเกมค้างไว้สักครู่ ระบบจะจับข้อมูลวัตถุดิบมาโชว์ที่นี่ให้เองอัตโนมัติ",
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, craftPage)
+local craftCaptureButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 62), Size = UDim2.new(0.5, -3, 0, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "จับข้อมูลตอนนี้",
+}, craftPage)
+local craftAutoButton = create("TextButton", {
+    Position = UDim2.new(0.5, 3, 0, 62), Size = UDim2.new(0.5, -3, 0, 26),
+    BackgroundColor3 = colors.green, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "จับอัตโนมัติ: ON",
+}, craftPage)
+local craftClearButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 92), Size = UDim2.new(1, 0, 0, 24),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham,
+    TextSize = 12, Text = "ล้างรายการทั้งหมด",
+}, craftPage)
+local craftStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 120), Size = UDim2.new(1, 0, 0, 18),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 12, TextWrapped = true, Text = "ยังไม่ได้จับข้อมูล",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, craftPage)
+local craftList = create("ScrollingFrame", {
+    Position = UDim2.fromOffset(0, 142), Size = UDim2.new(1, 0, 0, 232),
+    BackgroundTransparency = 1, BorderSizePixel = 0,
+    ScrollBarThickness = 3, ScrollBarImageColor3 = colors.muted,
+    CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, craftPage)
+create("UIListLayout", {
+    Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+}, craftList)
+
+-- ===== Craft Tracker: จับข้อมูลหน้าต่างคราฟต์ (MATERIALS REQUIRED) มาโชว์ไว้ในเมนู ไม่ต้องเปิดเกมดูซ้ำ =====
+local function richEscape(s)
+    return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub("\"", "&quot;"))
+end
+
+local function parseCraftNumber(text)
+    text = text:gsub(",", "")
+    local number, suffix = text:match("^([%d%.]+)([KkMmBbTt]?)$")
+    number = tonumber(number)
+    if not number then return nil end
+    local mult = {k = 1e3, m = 1e6, b = 1e9, t = 1e12}
+    return number * (mult[(suffix or ""):lower()] or 1)
+end
+
+local CRAFT_AMOUNT_PATTERN = "^[%d,%.]+[KkMmBbTt]?/[%d,%.]+[KkMmBbTt]?$"
+
+local function findCraftWindow()
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if label:IsA("TextLabel") and not label:IsDescendantOf(gui) and guiVisible(label)
+            and normalizeDuck(stripRichText(label.Text)) == "materialsrequired" then
+            local scope = label.Parent
+            for _ = 1, 5 do
+                if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+                if scope.Parent and scope.Parent:IsA("ScreenGui") then break end
+                scope = scope.Parent
+            end
+            if scope then return label, scope end
+        end
+    end
+    return nil
+end
+
+local function findCraftButton(scope)
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("GuiButton") and guiVisible(obj) and normalizeDuck(buttonText(obj)) == "craft" then
+            return obj
+        end
+    end
+    return nil
+end
+
+-- ชื่อไอเทมมักอยู่แถวเดียวกับปุ่ม Craft (ทางซ้ายมือ) เช่น "SSJ"
+local function craftItemName(scope, materialsLabel, craftButton)
+    if not craftButton then return nil end
+    local by = craftButton.AbsolutePosition.Y + craftButton.AbsoluteSize.Y / 2
+    local best, bestX
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("TextLabel") and guiVisible(obj) and obj ~= materialsLabel and stripRichText(obj.Text) ~= "" then
+            local oy = obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2
+            if math.abs(oy - by) <= 16 and obj.AbsolutePosition.X < craftButton.AbsolutePosition.X then
+                if not bestX or obj.AbsolutePosition.X > bestX then
+                    best, bestX = obj, obj.AbsolutePosition.X
+                end
+            end
+        end
+    end
+    return best and stripRichText(best.Text) or nil
+end
+
+-- จับคู่ป้ายชื่อวัตถุดิบ + ป้าย "ปัจจุบัน/ต้องการ" โดยดูว่าอยู่แถวเดียวกัน (Y ใกล้กัน) แล้วชื่ออยู่ซ้ายมือ
+local function scanCraftMaterials(scope, materialsLabel)
+    local amounts = {}
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("TextLabel") and guiVisible(obj) and obj ~= materialsLabel then
+            local text = stripRichText(obj.Text):gsub("%s", "")
+            if text:match(CRAFT_AMOUNT_PATTERN) then table.insert(amounts, obj) end
+        end
+    end
+    local rows = {}
+    for _, amountLabel in ipairs(amounts) do
+        local ay = amountLabel.AbsolutePosition.Y + amountLabel.AbsoluteSize.Y / 2
+        local ax = amountLabel.AbsolutePosition.X
+        local nameLabel, nameX
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("TextLabel") and guiVisible(obj) and obj ~= amountLabel and obj ~= materialsLabel then
+                local text = stripRichText(obj.Text)
+                local trimmed = text:gsub("%s", "")
+                if text ~= "" and not trimmed:match(CRAFT_AMOUNT_PATTERN) then
+                    local oy = obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2
+                    if math.abs(oy - ay) <= 10 and obj.AbsolutePosition.X < ax then
+                        if not nameX or obj.AbsolutePosition.X > nameX then
+                            nameLabel, nameX = obj, obj.AbsolutePosition.X
+                        end
+                    end
+                end
+            end
+        end
+        if nameLabel then
+            local text = stripRichText(amountLabel.Text):gsub("%s", "")
+            local cur, need = text:match("^(.-)/(.-)$")
+            table.insert(rows, {name = stripRichText(nameLabel.Text), text = text, cur = cur, need = need, y = ay})
+        end
+    end
+    table.sort(rows, function(a, b) return a.y < b.y end)
+    return rows
+end
+
+local craftRecipes = {}
+local craftOrder = {}
+
+local function rebuildCraftList()
+    for _, child in ipairs(craftList:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    for index, itemName in ipairs(craftOrder) do
+        local data = craftRecipes[itemName]
+        if data then
+            local card = create("Frame", {
+                Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+                BackgroundColor3 = colors.tab, BorderSizePixel = 0, LayoutOrder = index,
+            }, craftList)
+            create("UICorner", {CornerRadius = UDim.new(0, 8)}, card)
+            create("UIPadding", {
+                PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10),
+                PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+            }, card)
+            create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2)}, card)
+
+            local headerRow = create("Frame", {
+                Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, LayoutOrder = 1,
+            }, card)
+            create("TextLabel", {
+                Size = UDim2.new(1, -26, 1, 0), BackgroundTransparency = 1,
+                Text = itemName, Font = Enum.Font.GothamBold, TextSize = 14,
+                TextColor3 = Color3.new(1, 1, 1), TextXAlignment = Enum.TextXAlignment.Left,
+            }, headerRow)
+            local removeButton = create("TextButton", {
+                AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0),
+                Size = UDim2.fromOffset(20, 20), Text = "×", TextColor3 = Color3.new(1, 1, 1),
+                BackgroundColor3 = Color3.fromRGB(140, 48, 58), BorderSizePixel = 0, TextSize = 14,
+            }, headerRow)
+            create("UICorner", {CornerRadius = UDim.new(0, 5)}, removeButton)
+            removeButton.Activated:Connect(function()
+                craftRecipes[itemName] = nil
+                for i, name in ipairs(craftOrder) do
+                    if name == itemName then table.remove(craftOrder, i) break end
+                end
+                rebuildCraftList()
+            end)
+
+            local ageSeconds = math.max(0, math.floor(os.clock() - data.capturedAt))
+            create("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
+                Text = "จับเมื่อ " .. ageSeconds .. " วินาทีที่แล้ว", Font = Enum.Font.Gotham,
+                TextSize = 11, TextColor3 = colors.muted, TextXAlignment = Enum.TextXAlignment.Left,
+                LayoutOrder = 2,
+            }, card)
+
+            local missing = {}
+            local lines = {}
+            for _, row in ipairs(data.rows) do
+                local curNum, needNum = parseCraftNumber(row.cur), parseCraftNumber(row.need)
+                local color, satisfied
+                if curNum and needNum then
+                    satisfied = curNum >= needNum
+                    color = satisfied and "7CE38B" or "FF8B8B"
+                else
+                    color = "C7CCD8"
+                end
+                table.insert(lines, string.format('<font color="#%s">%s  %s</font>',
+                    color, richEscape(row.name), richEscape(row.text)))
+                if satisfied == false then table.insert(missing, row.name) end
+            end
+            create("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, RichText = true,
+                Font = Enum.Font.GothamBold, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+                TextWrapped = true, LayoutOrder = 3,
+                Text = #missing > 0
+                    and ('<font color="#FF8B8B">ขาด: ' .. richEscape(table.concat(missing, ", ")) .. '</font>')
+                    or '<font color="#7CE38B">วัตถุดิบครบแล้ว พร้อมคราฟต์</font>',
+            }, card)
+            create("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+                BackgroundTransparency = 1, RichText = true, Font = Enum.Font.Gotham,
+                TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+                LineHeight = 1.15, LayoutOrder = 4, Text = table.concat(lines, "\n"),
+            }, card)
+        end
+    end
+    craftStatus.Text = #craftOrder > 0
+        and ("จับไว้ทั้งหมด " .. #craftOrder .. " รายการ")
+        or "ยังไม่ได้จับข้อมูล เปิดหน้าต่างคราฟต์ในเกมค้างไว้สักครู่"
+end
+
+local function captureCraftWindow(manual)
+    local materialsLabel, scope = findCraftWindow()
+    if not materialsLabel then
+        if manual then craftStatus.Text = "ไม่พบหน้าต่างคราฟต์ที่เปิดอยู่ตอนนี้ (ต้องเห็นคำว่า MATERIALS REQUIRED)" end
+        return false
+    end
+    local craftButton = findCraftButton(scope)
+    local itemName = craftItemName(scope, materialsLabel, craftButton) or "ไม่ทราบชื่อไอเทม"
+    local rows = scanCraftMaterials(scope, materialsLabel)
+    if #rows == 0 then
+        if manual then craftStatus.Text = "เจอหน้าต่างคราฟต์ แต่ยังอ่านรายการวัตถุดิบไม่ได้ ลองปุ่มสแกนหน้าจอ GUI (ในแท็บ Dungeon) แล้วส่งให้ผมดู" end
+        return false
+    end
+    if not craftRecipes[itemName] then table.insert(craftOrder, itemName) end
+    craftRecipes[itemName] = {rows = rows, capturedAt = os.clock()}
+    rebuildCraftList()
+    if manual then craftStatus.Text = "จับข้อมูล \"" .. itemName .. "\" แล้ว (" .. #rows .. " วัตถุดิบ)" end
+    return true
+end
+
+local craftAutoScan = true
+craftCaptureButton.Activated:Connect(function() captureCraftWindow(true) end)
+craftAutoButton.Activated:Connect(function()
+    craftAutoScan = not craftAutoScan
+    craftAutoButton.Text = craftAutoScan and "จับอัตโนมัติ: ON" or "จับอัตโนมัติ: OFF"
+    craftAutoButton.BackgroundColor3 = craftAutoScan and colors.green or colors.active
+end)
+craftClearButton.Activated:Connect(function()
+    craftRecipes = {}
+    craftOrder = {}
+    rebuildCraftList()
+end)
+craftTab.Activated:Connect(function() showPage("craft") end)
+
+-- อัปเดตอายุข้อมูล ("จับเมื่อ ... วินาทีที่แล้ว") เป็นระยะ และสแกนหาหน้าต่างคราฟต์อัตโนมัติ
+task.spawn(function()
+    local nextAgeRefresh = 0
+    while running do
+        task.wait(1.5)
+        if craftAutoScan then captureCraftWindow(false) end
+        if os.clock() >= nextAgeRefresh and #craftOrder > 0 then
+            nextAgeRefresh = os.clock() + 5
+            rebuildCraftList()
+        end
+    end
+end)
+
+end)()
 
 
 
