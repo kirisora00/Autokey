@@ -1,4 +1,4 @@
--- Autokey v2.38 (Head Stand: type a name -> warp to hover above their head, nearby-scan fallback if name not found): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.39 (Raid: fix "Already Spawned" showing with no Open-popup, wider retry window ~3-4 min): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.38",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.39",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.38" or "Anti-AFK: OFF  •  v2.38")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.39" or "Anti-AFK: OFF  •  v2.39")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -2336,6 +2336,20 @@ local function raidRound(alive, pause, fight)
         return true
     end
 
+    -- ป้าย "... Is Already Spawned!" บางจังหวะเกมจะขึ้นป้ายนี้ทันทีตอนกดค้าง E เลย
+    -- โดยไม่มีหน้า Raid Boss/ปุ่ม Open โผล่มาให้กดด้วยซ้ำ จึงต้องเช็คป้ายนี้ตั้งแต่ตอนรอ popup
+    -- ไม่ใช่เช็คแค่หลังกด Open เท่านั้น (ไม่งั้นจะรอจนครบ 6 วิแล้วฟ้อง "ไม่พบปุ่ม Open" ทั้งที่จริงคือบอสเก่ายังไม่หาย)
+    local function findSpawnedNotice()
+        for _, obj in ipairs(playerGui:GetDescendants()) do
+            if obj:IsA("TextLabel") and not obj:IsDescendantOf(gui) and obj.Text ~= ""
+                and normalizeDuck(stripRichText(obj.Text)):find("alreadyspawned", 1, true)
+                and guiVisible(obj) then
+                return obj
+            end
+        end
+        return nil
+    end
+
     raid.bossEntry = nil
     raid.ignore = {}
     raid.bbCache = {}
@@ -2365,7 +2379,9 @@ local function raidRound(alive, pause, fight)
     end
 
     local prompt, button, windowLabel
-    for attempt = 1, 12 do
+    local RAID_OPEN_MAX_ATTEMPTS = 25   -- ~25 x ~9s ≈ 3-4 นาที ถ้ายัง Already Spawned เกินนี้ค่อยยอมแพ้
+    local retryStart = os.clock()
+    for attempt = 1, RAID_OPEN_MAX_ATTEMPTS do
         -- 1) วาร์ปไปจุดกด E แล้วหาปุ่ม (ปุ่มอาจถูกสร้างใหม่หลังจบรอบ)
         raidSay("วาร์ปไปจุด Open Raid...")
         raidMoveTo(character, root, raid.promptPose)
@@ -2390,50 +2406,63 @@ local function raidRound(alive, pause, fight)
         endRaidHold()
 
         -- 3) รอหน้า Raid Boss แล้วกด Open
+        -- บางจังหวะเกมจะข้ามหน้าต่าง Raid Boss ไปเลย แล้วขึ้นป้าย "Already Spawned" ทันทีตอนกดค้าง E
+        -- (ไม่มีปุ่ม Open ให้กดเลย) จึงต้องเช็คป้ายนี้ระหว่างรอ popup ด้วย ไม่ใช่รอจนครบ 6 วิเฉยๆ
         raidSay("รอหน้า Raid Boss ขึ้น...")
+        local earlySpawnedNotice = false
         deadline = os.clock() + 6
         while alive() and os.clock() < deadline do
             button, windowLabel = findRaidOpenButton()
             if button then break end
+            if findSpawnedNotice() then
+                earlySpawnedNotice = true
+                break
+            end
             task.wait(0.15)
         end
         if not alive() then return "cancel" end
-        if not button then return "fail", "ไม่พบหน้า Raid Boss หรือปุ่ม Open ภายใน 6 วินาที" end
-        raidSay("กดปุ่ม Open...")
-        if not pressGuiButton(button) then
-            return "fail", "กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ"
+        if not button and not earlySpawnedNotice then
+            return "fail", "ไม่พบหน้า Raid Boss หรือปุ่ม Open ภายใน 6 วินาที"
         end
 
-        -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
-        if not pause(0.4) then return "cancel" end
-        for _ = 1, 3 do
-            if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
-            closeRaidWindow(windowLabel, pressGuiButton)
-            if not pause(0.3) then return "cancel" end
-        end
+        local spawnedNotice = earlySpawnedNotice
+        if button then
+            raidSay("กดปุ่ม Open...")
+            if not pressGuiButton(button) then
+                return "fail", "กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ"
+            end
 
-        -- เกมแจ้ง "... Is Already Spawned!" = บอสรอบก่อนยังไม่หาย/ยังเสกไม่ได้: รอแล้วลองกด E ใหม่ ไม่ใช่วาร์ปเข้าวง
-        local spawnedNotice = false
-        local noticeUntil = os.clock() + 1.6
-        while alive() and os.clock() < noticeUntil do
-            for _, obj in ipairs(playerGui:GetDescendants()) do
-                if obj:IsA("TextLabel") and not obj:IsDescendantOf(gui) and obj.Text ~= ""
-                    and normalizeDuck(stripRichText(obj.Text)):find("alreadyspawned", 1, true)
-                    and guiVisible(obj) then
-                    spawnedNotice = true
-                    break
+            -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
+            if not pause(0.4) then return "cancel" end
+            for _ = 1, 3 do
+                if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
+                closeRaidWindow(windowLabel, pressGuiButton)
+                if not pause(0.3) then return "cancel" end
+            end
+
+            -- เกมแจ้ง "... Is Already Spawned!" = บอสรอบก่อนยังไม่หาย/ยังเสกไม่ได้: รอแล้วลองกด E ใหม่ ไม่ใช่วาร์ปเข้าวง
+            if not spawnedNotice then
+                local noticeUntil = os.clock() + 1.6
+                while alive() and os.clock() < noticeUntil do
+                    if findSpawnedNotice() then
+                        spawnedNotice = true
+                        break
+                    end
+                    task.wait(0.15)
                 end
             end
-            if spawnedNotice then break end
-            task.wait(0.15)
         end
         if not alive() then return "cancel" end
         if spawnedNotice then
-            if attempt >= 12 then
-                return "fail", "เกมแจ้งว่าบอสยังเสกอยู่ (Already Spawned) ต่อเนื่องนานเกินไป หยุด AUTO"
+            local elapsed = math.floor(os.clock() - retryStart)
+            if attempt >= RAID_OPEN_MAX_ATTEMPTS then
+                return "fail", string.format(
+                    "เกมแจ้งว่าบอสยังเสกอยู่ (Already Spawned) นานเกิน %d วินาทีแล้ว หยุด AUTO\nถ้าติดค้างจริง อาจต้องออกจากด่าน/รีเกมแล้วเริ่มใหม่",
+                    elapsed)
             end
-            raidSay(string.format("บอสรอบก่อนยังไม่หาย (Already Spawned) รอ 6 วินาทีแล้วลองกด Open ใหม่ (%d/12)", attempt))
-            if not pause(6) then return "cancel" end
+            raidSay(string.format("บอสรอบก่อนยังไม่หาย (Already Spawned) รอ 8 วินาทีแล้วลองใหม่ (%d/%d • รอมาแล้ว %ds)",
+                attempt, RAID_OPEN_MAX_ATTEMPTS, elapsed))
+            if not pause(8) then return "cancel" end
             continue
         end
         break
