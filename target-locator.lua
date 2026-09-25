@@ -1,4 +1,4 @@
--- Autokey v2.35 (Craft Tracker: live Beli/Diamond from HUD + auto-refresh item counts from Inventory): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.36 (Craft Tracker: fix stutter - cache HUD currency labels, scan only while the Craft tab is open): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.35",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.36",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.35" or "Anti-AFK: OFF  •  v2.35")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.36" or "Anti-AFK: OFF  •  v2.36")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -4168,22 +4168,38 @@ local liveCurrency = {}
 local inventoryCounts = {}
 local inventoryCapturedAt = -math.huge
 
+-- อ่านค่าเงิน/เพชรแบบเบาๆ: หา label ของ HUD แค่ครั้งเดียวแล้วเก็บอ้างอิงไว้ (ไม่ไล่สแกนทั้งจอทุกครั้ง
+-- ที่ทำให้กระตุก) ครั้งต่อไปแค่อ่าน .Text ตรงๆ เร็วมาก จะสแกนใหม่ก็ต่อเมื่อ label หายไป (เช่นตอนตัวละครเกิดใหม่)
+local currencyLabels = nil
 local function scanCurrency()
-    for _, frame in ipairs(playerGui:GetDescendants()) do
-        if frame.Name == "Currency" and not frame:IsDescendantOf(gui) and guiVisible(frame) then
-            for _, child in ipairs(frame:GetChildren()) do
-                for _, label in ipairs(child:GetDescendants()) do
-                    if label:IsA("TextLabel") and guiVisible(label) then
-                        local text = stripRichText(label.Text):gsub("%s", "")
-                        if text:match("^[%d%.,]+[KkMmBbTt]?$") then
-                            liveCurrency[normalizeDuck(child.Name)] = stripRichText(label.Text)
+    if not currencyLabels then
+        currencyLabels = {}
+        for _, frame in ipairs(playerGui:GetDescendants()) do
+            if frame.Name == "Currency" and not frame:IsDescendantOf(gui) and guiVisible(frame) then
+                for _, child in ipairs(frame:GetChildren()) do
+                    for _, label in ipairs(child:GetDescendants()) do
+                        if label:IsA("TextLabel") then
+                            currencyLabels[normalizeDuck(child.Name)] = label
                             break
                         end
                     end
                 end
+                break
             end
         end
     end
+    local lost = false
+    for key, label in pairs(currencyLabels) do
+        if label.Parent and guiVisible(label) then
+            local text = stripRichText(label.Text):gsub("%s", "")
+            if text:match("^[%d%.,]+[KkMmBbTt]?$") then
+                liveCurrency[key] = stripRichText(label.Text)
+            end
+        else
+            lost = true
+        end
+    end
+    if lost then currencyLabels = nil end
 end
 
 local function findButtonByText(scope, wanted)
@@ -4411,9 +4427,11 @@ craftTab.Activated:Connect(function() showPage("craft") end)
 task.spawn(function()
     local nextAgeRefresh = 0
     while running do
-        task.wait(1.5)
-        scanCurrency() -- เงิน/เพชร: อ่านจาก HUD ได้เสมอ ไม่ต้องรอเปิดหน้าต่างไหน
-        if craftAutoScan then
+        task.wait(2)
+        scanCurrency() -- เบามาก อ่านค่าที่แคชไว้แล้ว ปล่อยให้ทำงานตลอดได้ไม่กระตุก
+        -- การหาหน้าต่างคราฟต์/กระเป๋าต้องไล่สแกน GUI ทั้งจอ ถ้าปล่อยให้ทำงานตลอดเวลาแม้ไม่ได้เปิดแท็บนี้ดู
+        -- จะกินแรงจนเกมกระตุก จึงสแกนเฉพาะตอนเปิดแท็บ Craft ดูอยู่เท่านั้น
+        if craftAutoScan and currentPage == "craft" then
             captureCraftWindow(false)
             captureInventory(false)
         end
