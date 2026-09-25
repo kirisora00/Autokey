@@ -1,4 +1,4 @@
--- Autokey v2.39 (Raid: fix "Already Spawned" showing with no Open-popup, wider retry window ~3-4 min): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.40 (Raid/Dungeon: optional buff-weapon swap before fight - equip 2nd weapon, tap its skill, switch back to main): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.39",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.40",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.39" or "Anti-AFK: OFF  •  v2.39")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.40" or "Anti-AFK: OFF  •  v2.40")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -582,6 +582,74 @@ local raidStatus = create("TextLabel", {
     TextYAlignment = Enum.TextYAlignment.Top,
     Text = "ยังไม่ได้บันทึกจุด\nAUTO: เปิด Raid → เข้าวง → ตีลูกบอล/ลูกน้องก่อน แล้วบอส (ลอยเหนือหัว) → ปิด Victory → วนใหม่",
 }, raidPage)
+
+-- ===== อาวุธเสริมบัฟ: สลับไปถือ กดสกิลบัฟ (เช่น F ของ SSJ ให้ CidBeta ตีแรงขึ้น) แล้วสลับกลับอาวุธหลักก่อนตี =====
+-- หน้า Raid เต็มพอดีอยู่แล้ว จึงเปลี่ยนเป็นกรอบเลื่อน (เหมือนเมนูซ้าย) แทนการยัดเพิ่มจนล้นจอ
+;(function()
+    local raidScroll = create("ScrollingFrame", {
+        Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 3, ScrollBarImageColor3 = colors.muted,
+        CanvasSize = UDim2.fromOffset(0, 466),
+    }, raidPage)
+    for _, child in ipairs(raidPage:GetChildren()) do
+        if child ~= raidScroll then child.Parent = raidScroll end
+    end
+
+    create("TextLabel", {
+        Position = UDim2.fromOffset(0, 376), Size = UDim2.new(1, 0, 0, 16),
+        BackgroundTransparency = 1, TextColor3 = colors.muted, TextSize = 12,
+        Text = "อาวุธเสริมบัฟ (สลับไปกดสกิล แล้วสลับกลับอาวุธหลักก่อนตี):",
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, raidScroll)
+    local raidBuffWeapon = create("TextBox", {
+        Position = UDim2.fromOffset(0, 394), Size = UDim2.new(0.68, -3, 0, 30),
+        BackgroundColor3 = colors.active, BorderSizePixel = 0,
+        TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+        Text = "", ClearTextOnFocus = false,
+        PlaceholderText = "ชื่ออาวุธเสริม เช่น SSJ2 (ว่าง = ปิด)",
+    }, raidScroll)
+    local raidBuffWeaponKey = create("TextBox", {
+        Position = UDim2.new(0.68, 3, 0, 394), Size = UDim2.new(0.32, -3, 0, 30),
+        BackgroundColor3 = colors.active, BorderSizePixel = 0,
+        TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+        Text = "F", ClearTextOnFocus = false,
+    }, raidScroll)
+    local raidBuffWeaponButton = create("TextButton", {
+        Position = UDim2.fromOffset(0, 428), Size = UDim2.new(1, 0, 0, 30),
+        BackgroundColor3 = colors.active, BorderSizePixel = 0,
+        TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+        TextSize = 13, Text = "อาวุธเสริมบัฟ: OFF (ใส่ชื่ออาวุธด้านบนก่อน)",
+    }, raidScroll)
+
+    raid.buffWeapon = false
+    raid.buffWeaponName = raidBuffWeapon
+    raid.buffWeaponKeyBox = raidBuffWeaponKey
+
+    local function refreshBuffWeaponButton()
+        if raid.buffWeapon then
+            raidBuffWeaponButton.Text = string.format("อาวุธเสริมบัฟ: ON (%s • กด %s)",
+                raidBuffWeapon.Text, raidBuffWeaponKey.Text)
+            raidBuffWeaponButton.BackgroundColor3 = colors.green
+        else
+            raidBuffWeaponButton.Text = "อาวุธเสริมบัฟ: OFF (ใส่ชื่ออาวุธด้านบนก่อน)"
+            raidBuffWeaponButton.BackgroundColor3 = colors.active
+        end
+    end
+    raidBuffWeaponButton.Activated:Connect(function()
+        if normalizeDuck(raidBuffWeapon.Text) == "" then
+            raidBuffWeaponButton.Text = "อาวุธเสริมบัฟ: ใส่ชื่ออาวุธก่อนครับ"
+            return
+        end
+        raid.buffWeapon = not raid.buffWeapon
+        refreshBuffWeaponButton()
+    end)
+    raidBuffWeapon.FocusLost:Connect(refreshBuffWeaponButton)
+    raidBuffWeaponKey.FocusLost:Connect(function()
+        local key = raidBuffWeaponKey.Text:gsub("%s", "")
+        raidBuffWeaponKey.Text = key ~= "" and key:sub(1, 1):upper() or "F"
+        refreshBuffWeaponButton()
+    end)
+end)()
 
 local dungeonPage = makePage()
 dungeonPage.Visible = false
@@ -2295,8 +2363,9 @@ local function dismissVictory(label, pause)
 end
 
 -- ถืออาวุธ (Tool ในกระเป๋า/แถบด้านล่าง) ตามชื่อที่ตั้งไว้ ถ้ายังไม่ได้ถือ; เว้นช่องว่างเพื่อปิด
-local function equipRaidWeapon(character)
-    local wanted = normalizeDuck(raidWeapon.Text)
+-- ใส่ nameOverride เพื่อถืออาวุธอื่นชั่วคราว (เช่น อาวุธเสริมบัฟ) โดยไม่ต้องเพิ่มฟังก์ชันใหม่ (กันชนขีดจำกัด register)
+local function equipRaidWeapon(character, nameOverride)
+    local wanted = normalizeDuck(nameOverride or raidWeapon.Text)
     if wanted == "" then return end
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not humanoid or humanoid.Health <= 0 then return end
@@ -2510,6 +2579,24 @@ local function raidRound(alive, pause, fight)
         if nowRoot then nearby = "\nตัวที่อยู่ใกล้:\n" .. describeNearbyHumanoids(nowRoot) end
         warn("Raid: ไม่พบบอส" .. nearby)
         return "fail", "ไม่พบบอสตามชื่อ \"" .. raidBossName.Text .. "\" ภายใน 35 วินาที (Portal Gun หมด/วาร์ปไม่สำเร็จ/ชื่อบอสไม่ตรง)" .. nearby
+    end
+
+    -- 5.4) อาวุธเสริมบัฟ (ถ้าตั้งไว้): สลับไปถือ กดสกิลบัฟ (เช่น F ของ SSJ) แล้วสลับกลับอาวุธหลักก่อนตี
+    -- ต้องทำสดใหม่ทุกรอบ เพราะเข้าด่านใหม่แล้วสถานะ/บัฟที่เปิดค้างไว้ก่อนวาร์ปจะหลุดหมด
+    if raid.buffWeapon and normalizeDuck(raid.buffWeaponName.Text) ~= "" then
+        raidSay("สลับไปอาวุธเสริม (" .. raid.buffWeaponName.Text .. ") เพื่อบัฟ...")
+        character = duckCharacter()
+        if character then equipRaidWeapon(character, raid.buffWeaponName.Text) end
+        if not pause(0.6) then return "cancel" end
+        local buffWeaponKey = raid.buffWeaponKeyBox.Text ~= "" and raid.buffWeaponKeyBox.Text or "F"
+        if not tapKey(buffWeaponKey) then
+            warn("Raid: กดปุ่มสกิลบัฟอาวุธเสริม (" .. buffWeaponKey .. ") ไม่สำเร็จ")
+        end
+        if not pause(0.5) then return "cancel" end
+        raidSay("สลับกลับอาวุธหลัก (" .. raidWeapon.Text .. ")...")
+        character = duckCharacter()
+        if character then equipRaidWeapon(character) end
+        if not pause(0.4) then return "cancel" end
     end
 
     -- 5.5) ถืออาวุธ แล้วกด J เปิดบัฟ 1 ครั้งต่อรอบ (บัฟหลุดทุกครั้งที่ออกจากด่าน และกดซ้ำจะปิด)
@@ -3366,6 +3453,21 @@ local function dungeonRound(alive, pause, fight)
     end
     local lastClick = os.clock()
     local reclicks = 0
+
+    -- 8.5) อาวุธเสริมบัฟ (ถ้าตั้งไว้): สลับไปถือ กดสกิลบัฟ แล้วสลับกลับอาวุธหลักก่อนตี (เหมือนหน้า Raid)
+    if raid.buffWeapon and normalizeDuck(raid.buffWeaponName.Text) ~= "" then
+        character = duckCharacter()
+        if character then equipRaidWeapon(character, raid.buffWeaponName.Text) end
+        if not pause(0.6) then return "cancel" end
+        local buffWeaponKey = raid.buffWeaponKeyBox.Text ~= "" and raid.buffWeaponKeyBox.Text or "F"
+        if not tapKey(buffWeaponKey) then
+            warn("Dungeon: กดปุ่มสกิลบัฟอาวุธเสริม (" .. buffWeaponKey .. ") ไม่สำเร็จ")
+        end
+        if not pause(0.5) then return "cancel" end
+        character = duckCharacter()
+        if character then equipRaidWeapon(character) end
+        if not pause(0.4) then return "cancel" end
+    end
 
     -- 9) ถืออาวุธ + บัฟ J
     character = duckCharacter()
