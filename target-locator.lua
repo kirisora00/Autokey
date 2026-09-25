@@ -1,4 +1,4 @@
--- Autokey v2.30 (Anti-AFK): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.31 (UI overhaul: draggable window, scrollable menu, hide-to-F1): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -28,7 +28,6 @@ local FOLLOW_DISTANCE = 9 -- ห่างจากเป้าหมายเก
 local selected = 2
 local running = true
 local antiAfk = {enabled = true}
-local collapsed = false
 local auto = false
 local locked = nil
 local visitedCharacter = nil
@@ -108,6 +107,7 @@ local colors = {
     active = Color3.fromRGB(51, 58, 78),
     blue = Color3.fromRGB(53, 113, 220),
     green = Color3.fromRGB(38, 140, 93),
+    tab = Color3.fromRGB(41, 43, 56),
 }
 
 local gui = create("ScreenGui", {
@@ -143,6 +143,42 @@ local close = create("TextButton", {
     BackgroundColor3 = Color3.fromRGB(140, 48, 58), BorderSizePixel = 0,
 }, panel)
 
+-- ===== ลากหน้าต่างไปวางตรงไหนของจอก็ได้ (คลิกค้างที่แถบหัวข้อ ยกเว้นปุ่มซ่อน/ปิด) =====
+local dragHandle = create("Frame", {
+    Position = UDim2.fromOffset(0, 0), Size = UDim2.new(1, -90, 0, 44),
+    BackgroundTransparency = 1, Active = true, ZIndex = 5,
+}, panel)
+do
+    local dragging = false
+    local dragStart, startPos
+    local function updateDrag(input)
+        local delta = input.Position - dragStart
+        panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = panel.Position
+            local connection
+            connection = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    connection:Disconnect()
+                end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            updateDrag(input)
+        end
+    end)
+end
+
 local content = create("Frame", {
     Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 396),
     BackgroundTransparency = 1,
@@ -153,65 +189,94 @@ local sidebar = create("Frame", {
     BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
 }, content)
 create("TextLabel", {
-    Position = UDim2.fromOffset(16, 14), Size = UDim2.fromOffset(130, 25),
+    Position = UDim2.fromOffset(16, 12), Size = UDim2.fromOffset(130, 20),
     BackgroundTransparency = 1, Text = "MENU", TextColor3 = colors.muted,
     Font = Enum.Font.GothamBold, TextSize = 12,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 
+-- เมนูด้านซ้ายเรียงเองอัตโนมัติ (ScrollingFrame + UIListLayout) แทนการกำหนดตำแหน่ง Y เองทีละปุ่ม
+-- เพิ่มเมนูใหม่ในอนาคตแค่ตั้ง LayoutOrder แล้ว Parent มาที่ navList ได้เลย ไม่ต้องคำนวณตำแหน่งเอง ไม่รกและไม่ชนกัน
+local navList = create("ScrollingFrame", {
+    Position = UDim2.fromOffset(0, 36), Size = UDim2.new(1, 0, 0, 314),
+    BackgroundTransparency = 1, BorderSizePixel = 0,
+    ScrollBarThickness = 3, ScrollBarImageColor3 = colors.muted,
+    CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, sidebar)
+create("UIListLayout", {
+    Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
+    HorizontalAlignment = Enum.HorizontalAlignment.Center,
+}, navList)
+create("UIPadding", {
+    PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 10),
+}, navList)
+
+-- หัวข้อกลุ่มเมนู (แค่ป้ายข้อความ ไม่ใช่ปุ่ม)
+local function navCaption(order, text)
+    create("TextLabel", {
+        LayoutOrder = order, Size = UDim2.fromOffset(145, 18),
+        BackgroundTransparency = 1, Text = text, TextColor3 = colors.muted,
+        Font = Enum.Font.GothamBold, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, navList)
+end
+navCaption(0, "เป้าหมาย")
+
 local tabs = {}
 for i, target in ipairs(targets) do
     tabs[i] = create("TextButton", {
-        Position = UDim2.fromOffset(10, 40 + (i - 1) * 40),
+        LayoutOrder = i,
         Size = UDim2.fromOffset(145, 34), Text = target.label,
         TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham,
-        TextSize = 15, BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
-    }, sidebar)
+        TextSize = 15, BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+    }, navList)
     create("UICorner", {CornerRadius = UDim.new(0, 7)}, tabs[i])
 end
+navCaption(9, "ระบบเสริม")
 local flightTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 120), Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 10,
+    Size = UDim2.fromOffset(145, 34),
     Text = "Flight / บิน", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
-    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
-}, sidebar)
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, flightTab)
 
 local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.30",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.31",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.30" or "Anti-AFK: OFF  •  v2.30")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.31" or "Anti-AFK: OFF  •  v2.31")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
 local duckTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 160), Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 20, Size = UDim2.fromOffset(145, 34),
     Text = "Duck Boss / เป็ด", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
-    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
-}, sidebar)
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, duckTab)
 
 local skillsTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 200), Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 30, Size = UDim2.fromOffset(145, 34),
     Text = "Skills / สกิล", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
-    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
-}, sidebar)
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, skillsTab)
 
 local raidTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 240), Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 40, Size = UDim2.fromOffset(145, 34),
     Text = "Raid / เสกบอส", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
-    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
-}, sidebar)
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, raidTab)
 
 local function makePage()
@@ -521,11 +586,11 @@ local raidStatus = create("TextLabel", {
 local dungeonPage = makePage()
 dungeonPage.Visible = false
 local dungeonTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 280), Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 50, Size = UDim2.fromOffset(145, 34),
     Text = "Dungeon / ลงดัน", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
-    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
-}, sidebar)
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, dungeonTab)
 
 local function dungeonRow(y, text, default)
@@ -599,22 +664,22 @@ local function showPage(page)
     currentPage = page
     if gachaUI.page then
         gachaUI.page.Visible = page == "gacha"
-        gachaUI.tab.BackgroundColor3 = page == "gacha" and colors.active or colors.sidebar
+        gachaUI.tab.BackgroundColor3 = page == "gacha" and colors.active or colors.tab
     end
     dungeonPage.Visible = page == "dungeon"
-    dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.sidebar
+    dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.tab
     raidPage.Visible = page == "raid"
-    raidTab.BackgroundColor3 = page == "raid" and colors.active or colors.sidebar
+    raidTab.BackgroundColor3 = page == "raid" and colors.active or colors.tab
     targetPage.Visible = page == "target"
     flightPage.Visible = page == "flight"
     duckPage.Visible = page == "duck"
     skillsPage.Visible = page == "skills"
-    skillsTab.BackgroundColor3 = page == "skills" and colors.active or colors.sidebar
-    duckTab.BackgroundColor3 = page == "duck" and colors.active or colors.sidebar
-    flightTab.BackgroundColor3 = page == "flight" and colors.active or colors.sidebar
+    skillsTab.BackgroundColor3 = page == "skills" and colors.active or colors.tab
+    duckTab.BackgroundColor3 = page == "duck" and colors.active or colors.tab
+    flightTab.BackgroundColor3 = page == "flight" and colors.active or colors.tab
     for i, tab in ipairs(tabs) do
         tab.BackgroundColor3 = page == "target" and i == selected
-            and colors.active or colors.sidebar
+            and colors.active or colors.tab
     end
 end
 
@@ -824,11 +889,29 @@ setAuto = function(enabled)
         and Color3.fromRGB(35, 145, 85) or Color3.fromRGB(70, 75, 85)
 end
 
-minimize.Activated:Connect(function()
-    collapsed = not collapsed
-    content.Visible = not collapsed
-    panel.Size = collapsed and UDim2.fromOffset(330, 44) or UDim2.fromOffset(600, 440)
-    minimize.Text = collapsed and "+" or "−"
+-- ===== ซ่อน/เรียกคืนทั้งหน้าต่าง: กดปุ่มซ่อนหรือ F1 เพื่อสลับ =====
+local hintButton = create("TextButton", {
+    AnchorPoint = Vector2.new(1, 0),
+    Position = UDim2.new(1, -20, 0, 20),
+    Size = UDim2.fromOffset(176, 30),
+    BackgroundColor3 = colors.window, BackgroundTransparency = 0.05,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 13,
+    Text = "Autokey ซ่อนอยู่ • กด F1", Visible = false,
+}, gui)
+create("UICorner", {CornerRadius = UDim.new(0, 8)}, hintButton)
+create("UIStroke", {Color = Color3.fromRGB(62, 65, 80), Thickness = 1}, hintButton)
+
+local function setPanelVisible(visible)
+    panel.Visible = visible
+    hintButton.Visible = not visible
+end
+minimize.Activated:Connect(function() setPanelVisible(false) end)
+hintButton.Activated:Connect(function() setPanelVisible(true) end)
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == Enum.KeyCode.F1 and not UserInputService:GetFocusedTextBox() then
+        setPanelVisible(not panel.Visible)
+    end
 end)
 
 local added = workspace.DescendantAdded:Connect(function(obj)
@@ -3592,11 +3675,11 @@ local gachaPage = makePage()
 gachaPage.Visible = false
 gachaUI.page = gachaPage
 local gachaTab = create("TextButton", {
-    Position = UDim2.fromOffset(10, 320), Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 60, Size = UDim2.fromOffset(145, 34),
     Text = "Gacha / สุ่มของ", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
-    BackgroundColor3 = colors.sidebar, BorderSizePixel = 0,
-}, sidebar)
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, gachaTab)
 gachaUI.tab = gachaTab
 local function gachaRow(y, text, default)
