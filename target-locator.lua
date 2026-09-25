@@ -1,4 +1,4 @@
--- Autokey v2.34 (fix: version label on the Anti-AFK footer button was stuck at v2.31): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.35 (Craft Tracker: live Beli/Diamond from HUD + auto-refresh item counts from Inventory): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.34",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.35",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.34" or "Anti-AFK: OFF  •  v2.34")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.35" or "Anti-AFK: OFF  •  v2.35")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -4159,8 +4159,118 @@ end
 
 local craftRecipes = {}
 local craftOrder = {}
+local rebuildCraftList -- forward declared: live-data helpers below call it; body defined further down
 
-local function rebuildCraftList()
+-- ===== แหล่งข้อมูล real-time เพิ่มเติม =====
+-- 1) เงิน/เพชร: อ่านจาก HUD มุมซ้ายบนได้ตลอดเวลา ไม่ต้องเปิดหน้าต่างไหนเลย
+-- 2) จำนวนไอเทมอื่นๆ: อ่านจากหน้าต่าง INVENTORY (กระเป๋า) ทุกครั้งที่เปิดค้างไว้สักครู่ (ไม่ต้องเป็นหน้าคราฟต์)
+local liveCurrency = {}
+local inventoryCounts = {}
+local inventoryCapturedAt = -math.huge
+
+local function scanCurrency()
+    for _, frame in ipairs(playerGui:GetDescendants()) do
+        if frame.Name == "Currency" and not frame:IsDescendantOf(gui) and guiVisible(frame) then
+            for _, child in ipairs(frame:GetChildren()) do
+                for _, label in ipairs(child:GetDescendants()) do
+                    if label:IsA("TextLabel") and guiVisible(label) then
+                        local text = stripRichText(label.Text):gsub("%s", "")
+                        if text:match("^[%d%.,]+[KkMmBbTt]?$") then
+                            liveCurrency[normalizeDuck(child.Name)] = stripRichText(label.Text)
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function findButtonByText(scope, wanted)
+    wanted = normalizeDuck(wanted)
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("GuiButton") and guiVisible(obj) and normalizeDuck(buttonText(obj)) == wanted then
+            return obj
+        end
+    end
+    return nil
+end
+
+local function findInventoryWindow()
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if label:IsA("TextLabel") and not label:IsDescendantOf(gui) and guiVisible(label)
+            and normalizeDuck(stripRichText(label.Text)) == "inventory" then
+            local scope = label.Parent
+            for _ = 1, 6 do
+                if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+                if findButtonByText(scope, "all") then return scope end
+                scope = scope.Parent
+            end
+        end
+    end
+    return nil
+end
+
+-- จับคู่ป้ายจำนวน "xN" กับชื่อไอเทมที่อยู่ใต้ไอคอนเดียวกัน (ชื่ออยู่ใต้ป้ายจำนวน ในกรอบ X ใกล้กัน)
+local function scanInventoryCounts(scope)
+    local counts = {}
+    local countLabels = {}
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("TextLabel") and guiVisible(obj) then
+            local text = stripRichText(obj.Text):gsub("%s", "")
+            if text:match("^[Xx]%d[%d,]*$") then table.insert(countLabels, obj) end
+        end
+    end
+    for _, countLabel in ipairs(countLabels) do
+        local cx = countLabel.AbsolutePosition.X + countLabel.AbsoluteSize.X / 2
+        local cy = countLabel.AbsolutePosition.Y
+        local nameLabel, bestDist
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("TextLabel") and guiVisible(obj) and obj ~= countLabel then
+                local text = stripRichText(obj.Text)
+                local trimmed = text:gsub("%s", "")
+                if text ~= "" and not trimmed:match("^[Xx]%d[%d,]*$") then
+                    local ox = obj.AbsolutePosition.X + obj.AbsoluteSize.X / 2
+                    local oy = obj.AbsolutePosition.Y
+                    if oy >= cy and oy - cy < 60 and math.abs(ox - cx) < 50 then
+                        local dist = (oy - cy) + math.abs(ox - cx)
+                        if not bestDist or dist < bestDist then nameLabel, bestDist = obj, dist end
+                    end
+                end
+            end
+        end
+        if nameLabel then
+            local qty = tonumber((stripRichText(countLabel.Text):gsub("[^%d]", "")))
+            if qty then counts[normalizeDuck(stripRichText(nameLabel.Text))] = qty end
+        end
+    end
+    return counts
+end
+
+local function captureInventory(manual)
+    local scope = findInventoryWindow()
+    if not scope then
+        if manual then craftStatus.Text = "ไม่พบหน้าต่าง INVENTORY ที่เปิดอยู่ตอนนี้ (กดปุ่ม INV ในเกมค้างไว้)" end
+        return false
+    end
+    local allButton = findButtonByText(scope, "all")
+    if allButton then pressGuiButton(allButton) end
+    local counts = scanInventoryCounts(scope)
+    local found = 0
+    for _ in pairs(counts) do found += 1 end
+    if found == 0 then
+        if manual then craftStatus.Text = "เจอหน้าต่าง INVENTORY แต่ยังอ่านจำนวนไอเทมไม่ได้" end
+        return false
+    end
+    inventoryCounts = counts
+    inventoryCapturedAt = os.clock()
+    rebuildCraftList()
+    if manual then craftStatus.Text = "อัปเดตจำนวนไอเทมจากกระเป๋าแล้ว (" .. found .. " ชนิด)" end
+    return true
+end
+
+
+rebuildCraftList = function()
     for _, child in ipairs(craftList:GetChildren()) do
         if child:IsA("Frame") then child:Destroy() end
     end
@@ -4201,9 +4311,14 @@ local function rebuildCraftList()
             end)
 
             local ageSeconds = math.max(0, math.floor(os.clock() - data.capturedAt))
+            local ageText = "จับสูตรเมื่อ " .. ageSeconds .. " วินาทีที่แล้ว"
+            local invAge = os.clock() - inventoryCapturedAt
+            if invAge < 3600 then
+                ageText = ageText .. " • กระเป๋าอัปเดตเมื่อ " .. math.max(0, math.floor(invAge)) .. " วินาทีที่แล้ว"
+            end
             create("TextLabel", {
                 Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
-                Text = "จับเมื่อ " .. ageSeconds .. " วินาทีที่แล้ว", Font = Enum.Font.Gotham,
+                Text = ageText, Font = Enum.Font.Gotham,
                 TextSize = 11, TextColor3 = colors.muted, TextXAlignment = Enum.TextXAlignment.Left,
                 LayoutOrder = 2,
             }, card)
@@ -4211,7 +4326,17 @@ local function rebuildCraftList()
             local missing = {}
             local lines = {}
             for _, row in ipairs(data.rows) do
-                local curNum, needNum = parseCraftNumber(row.cur), parseCraftNumber(row.need)
+                local key = normalizeDuck(row.name)
+                local curText, curNum = row.cur, parseCraftNumber(row.cur)
+                local liveTag = ""
+                if liveCurrency[key] then
+                    curText, curNum = liveCurrency[key], parseCraftNumber(liveCurrency[key])
+                    liveTag = " ⚡"
+                elseif inventoryCounts[key] then
+                    curText, curNum = tostring(inventoryCounts[key]), inventoryCounts[key]
+                    liveTag = " 🎒"
+                end
+                local needNum = parseCraftNumber(row.need)
                 local color, satisfied
                 if curNum and needNum then
                     satisfied = curNum >= needNum
@@ -4219,8 +4344,8 @@ local function rebuildCraftList()
                 else
                     color = "C7CCD8"
                 end
-                table.insert(lines, string.format('<font color="#%s">%s  %s</font>',
-                    color, richEscape(row.name), richEscape(row.text)))
+                table.insert(lines, string.format('<font color="#%s">%s  %s/%s%s</font>',
+                    color, richEscape(row.name), richEscape(curText), richEscape(row.need), liveTag))
                 if satisfied == false then table.insert(missing, row.name) end
             end
             create("TextLabel", {
@@ -4265,7 +4390,11 @@ local function captureCraftWindow(manual)
 end
 
 local craftAutoScan = true
-craftCaptureButton.Activated:Connect(function() captureCraftWindow(true) end)
+craftCaptureButton.Activated:Connect(function()
+    local gotCraft = captureCraftWindow(true)
+    local gotInv = captureInventory(not gotCraft)
+    if gotCraft and gotInv then craftStatus.Text = "จับข้อมูลสูตรคราฟต์ + อัปเดตกระเป๋าแล้ว" end
+end)
 craftAutoButton.Activated:Connect(function()
     craftAutoScan = not craftAutoScan
     craftAutoButton.Text = craftAutoScan and "จับอัตโนมัติ: ON" or "จับอัตโนมัติ: OFF"
@@ -4283,7 +4412,11 @@ task.spawn(function()
     local nextAgeRefresh = 0
     while running do
         task.wait(1.5)
-        if craftAutoScan then captureCraftWindow(false) end
+        scanCurrency() -- เงิน/เพชร: อ่านจาก HUD ได้เสมอ ไม่ต้องรอเปิดหน้าต่างไหน
+        if craftAutoScan then
+            captureCraftWindow(false)
+            captureInventory(false)
+        end
         if os.clock() >= nextAgeRefresh and #craftOrder > 0 then
             nextAgeRefresh = os.clock() + 5
             rebuildCraftList()
