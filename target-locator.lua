@@ -1,4 +1,4 @@
--- Autokey v2.37 (Craft Tracker: fix severe stutter - stop calling GetDescendants() once per row/item): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.38 (Head Stand: type a name -> warp to hover above their head, nearby-scan fallback if name not found): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.37",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.38",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.37" or "Anti-AFK: OFF  •  v2.37")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.38" or "Anti-AFK: OFF  •  v2.38")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -669,6 +669,10 @@ local function showPage(page)
     if extraTabs.craftPage then
         extraTabs.craftPage.Visible = page == "craft"
         extraTabs.craftTab.BackgroundColor3 = page == "craft" and colors.active or colors.tab
+    end
+    if extraTabs.headPage then
+        extraTabs.headPage.Visible = page == "headstand"
+        extraTabs.headTab.BackgroundColor3 = page == "headstand" and colors.active or colors.tab
     end
     dungeonPage.Visible = page == "dungeon"
     dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.tab
@@ -4444,6 +4448,276 @@ task.spawn(function()
     end
 end)
 
+end)()
+
+;(function()
+local headPage = makePage()
+headPage.Visible = false
+extraTabs.headPage = headPage
+local headTab = create("TextButton", {
+    LayoutOrder = 80, Size = UDim2.fromOffset(145, 34),
+    Text = "ยืนบนหัว / พิมพ์ชื่อ", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, headTab)
+extraTabs.headTab = headTab
+
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+    Text = "ยืนบนหัว (พิมพ์ชื่อใครก็ได้)", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 18,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, headPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 32),
+    BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
+    TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "พิมพ์ชื่อผู้เล่นหรือมอน (พิมพ์แค่บางส่วนก็ได้) แล้วกดไปยืนบนหัว ถ้าหาไม่เจอ ระบบจะสแกนหาเป้าหมายรอบตัวให้อัตโนมัติ",
+}, headPage)
+
+local headName = create("TextBox", {
+    Position = UDim2.fromOffset(0, 62), Size = UDim2.new(1, 0, 0, 32),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    PlaceholderText = "พิมพ์ชื่อตรงนี้...", Text = "", ClearTextOnFocus = false,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, headPage)
+create("UIPadding", {PaddingLeft = UDim.new(0, 8)}, headName)
+
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 100), Size = UDim2.fromOffset(280, 26),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "ความสูงเหนือหัว (studs)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, headPage)
+local headHeight = create("TextBox", {
+    Position = UDim2.new(1, -90, 0, 100), Size = UDim2.fromOffset(90, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "6", ClearTextOnFocus = false,
+}, headPage)
+
+local headGoButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 132), Size = UDim2.new(1, 0, 0, 32),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 14, Text = "ไปยืนบนหัว (ตามชื่อ)",
+}, headPage)
+local headStopButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 168), Size = UDim2.new(1, 0, 0, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "หยุดยืนบนหัว",
+}, headPage)
+
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 200), Size = UDim2.fromOffset(230, 20),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 12, Text = "สำรอง: สแกนหาเป้าหมายรอบตัว",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, headPage)
+local headRadius = create("TextBox", {
+    Position = UDim2.new(1, -60, 0, 200), Size = UDim2.fromOffset(60, 20),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 12,
+    Text = "60", ClearTextOnFocus = false,
+}, headPage)
+local headScanButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 224), Size = UDim2.new(1, 0, 0, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "สแกนรอบตัว (ระยะสั้นๆ)",
+}, headPage)
+
+local headList = create("ScrollingFrame", {
+    Position = UDim2.fromOffset(0, 254), Size = UDim2.new(1, 0, 0, 76),
+    BackgroundColor3 = colors.tab, BackgroundTransparency = 0.4, BorderSizePixel = 0,
+    ScrollBarThickness = 3, ScrollBarImageColor3 = colors.muted,
+    CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, headPage)
+create("UIListLayout", {
+    Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder,
+}, headList)
+
+local headStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 336), Size = UDim2.new(1, 0, 0, 38),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 12, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "พิมพ์ชื่อแล้วกดไปยืนบนหัว หรือกดสแกนรอบตัวเพื่อเลือกจากรายการ",
+}, headPage)
+
+-- หาเป้าหมายจากชื่อ: เทียบชื่อโมเดล + DisplayName แบบมีบางส่วนตรงก็พอ (เหมือนระบบหาบอส Raid)
+local function findByName(root, query)
+    local wanted = normalizeDuck(query)
+    if wanted == "" then return nil end
+    local tokens = {}
+    for word in string.gmatch(string.lower(query), "%w+") do
+        if #word >= 2 then table.insert(tokens, word) end
+    end
+    local function nameMatches(text)
+        if text:find(wanted, 1, true) then return true end
+        if #tokens == 0 then return false end
+        for _, word in ipairs(tokens) do
+            if not text:find(word, 1, true) then return false end
+        end
+        return true
+    end
+    local character = player.Character
+    local best, bestDist = nil, math.huge
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and model ~= character then
+            local haystack = normalizeDuck(model.Name .. " " .. humanoid.DisplayName)
+            if nameMatches(haystack) then
+                local part = getPart(model)
+                if part then
+                    local d = (root.Position - part.Position).Magnitude
+                    if d < bestDist then
+                        best, bestDist = {model = model, humanoid = humanoid, part = part, distance = d}, d
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- สำรอง: ไม่เจอชื่อ ก็สแกนหา Humanoid ทุกตัวที่อยู่ใกล้ตัวเรา (ไม่ไกลมาก) ให้เลือกเอง
+local function scanNearby(root, radius)
+    local character = player.Character
+    local rows = {}
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and model ~= character then
+            local part = getPart(model)
+            if part then
+                local d = (root.Position - part.Position).Magnitude
+                if d <= radius then
+                    table.insert(rows, {model = model, humanoid = humanoid, part = part, distance = d})
+                end
+            end
+        end
+    end
+    table.sort(rows, function(a, b) return a.distance < b.distance end)
+    return rows
+end
+
+local hs = {enabled = false, part = nil, humanoid = nil, name = "", offset = 6}
+
+local function stopHeadstand(message)
+    hs.enabled = false
+    hs.part = nil
+    hs.humanoid = nil
+    headGoButton.Text = "ไปยืนบนหัว (ตามชื่อ)"
+    headGoButton.BackgroundColor3 = colors.blue
+    headStatus.Text = message or "หยุดยืนบนหัวแล้ว"
+end
+
+local function startHeadstand(entry, message)
+    setAuto(false)
+    if flight then stopFlight("ปิดบินเพื่อไปยืนบนหัว") end
+    if stopDuck then stopDuck("หยุดเสกเป็ดเพื่อไปยืนบนหัว") end
+    hs.offset = math.clamp(tonumber(headHeight.Text) or 6, 1, 150)
+    headHeight.Text = tostring(hs.offset)
+    hs.part = entry.part
+    hs.humanoid = entry.humanoid
+    hs.name = entry.model.Name
+    hs.enabled = true
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.CFrame = CFrame.new(entry.part.Position + Vector3.new(0, hs.offset, 0)) * root.CFrame.Rotation
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+    headGoButton.Text = "กำลังยืนบนหัว: " .. hs.name .. " (กดหาใหม่เพื่อเปลี่ยน)"
+    headGoButton.BackgroundColor3 = colors.green
+    headStatus.Text = message or ("กำลังยืนบนหัว: " .. hs.name .. " • เดินตามตัวนี้ต่อเนื่องอัตโนมัติ")
+end
+
+-- ล็อกให้ตัวละครลอยอยู่เหนือหัวเป้าหมายทุกเฟรม ตามเป้าหมายที่เคลื่อนที่ (เหมือนระบบเกาะเหนือหัวบอสของ Raid)
+table.insert(flightConnections, RunService.Heartbeat:Connect(function()
+    if not running or not hs.enabled or not hs.part then return end
+    if not hs.part.Parent or not (hs.humanoid and hs.humanoid.Parent and hs.humanoid.Health > 0) then
+        stopHeadstand("เป้าหมายหายไปหรือตายแล้ว หยุดระบบยืนบนหัว")
+        return
+    end
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not root or not humanoid or humanoid.Health <= 0 or humanoid.SeatPart then return end
+    local target = hs.part.Position + Vector3.new(0, hs.offset, 0)
+    root.CFrame = CFrame.new(target) * root.CFrame.Rotation
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    if flight and flight.root == root then flight.cf = root.CFrame end
+end))
+
+local function refreshScan()
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then headStatus.Text = "รอตัวละครเกิดก่อนครับ"; return end
+    for _, child in ipairs(headList:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    local radius = math.clamp(tonumber(headRadius.Text) or 60, 10, 400)
+    headRadius.Text = tostring(radius)
+    local rows = scanNearby(root, radius)
+    if #rows == 0 then
+        headStatus.Text = string.format("ไม่เจอใครในระยะ %d studs เลยครับ ลองเข้าใกล้เป้าหมายแล้วสแกนใหม่", radius)
+        return
+    end
+    for i, row in ipairs(rows) do
+        if i > 20 then break end
+        local rowButton = create("TextButton", {
+            LayoutOrder = i, Size = UDim2.new(1, 0, 0, 24),
+            BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+            TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham, TextSize = 12,
+            Text = string.format("  %s (%s) — %.0f studs", row.model.Name, row.humanoid.DisplayName, row.distance),
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, headList)
+        create("UICorner", {CornerRadius = UDim.new(0, 5)}, rowButton)
+        rowButton.Activated:Connect(function()
+            startHeadstand(row, "เลือกจากรายการสแกน: กำลังวาร์ปไปยืนบนหัว " .. row.model.Name)
+        end)
+    end
+    headStatus.Text = string.format("เจอ %d เป้าหมายในระยะ %d studs — กดเลือกจากรายการเพื่อไปยืนบนหัว", #rows, radius)
+end
+
+headGoButton.Activated:Connect(function()
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then headStatus.Text = "รอตัวละครเกิดก่อนครับ"; return end
+    if raid.running or dungeon.running then
+        headStatus.Text = "ปิด Raid/Dungeon AUTO ก่อนใช้ระบบนี้ครับ (ชนกันได้)"
+        return
+    end
+    if normalizeDuck(headName.Text) == "" then
+        headStatus.Text = "พิมพ์ชื่อก่อนครับ"
+        return
+    end
+    local entry = findByName(root, headName.Text)
+    if entry then
+        startHeadstand(entry, string.format("เจอ %s (%s) ตามชื่อ กำลังวาร์ปไปยืนบนหัว...", entry.model.Name, entry.humanoid.DisplayName))
+    else
+        headStatus.Text = "ไม่เจอชื่อนี้ครับ กำลังสลับไปสแกนรอบตัวแทน..."
+        refreshScan()
+    end
+end)
+headStopButton.Activated:Connect(function() stopHeadstand("หยุดยืนบนหัวแล้ว") end)
+headScanButton.Activated:Connect(refreshScan)
+headHeight.FocusLost:Connect(function()
+    headHeight.Text = tostring(math.clamp(tonumber(headHeight.Text) or 6, 1, 150))
+end)
+headRadius.FocusLost:Connect(function()
+    headRadius.Text = tostring(math.clamp(tonumber(headRadius.Text) or 60, 10, 400))
+end)
+headTab.Activated:Connect(function() showPage("headstand") end)
 end)()
 
 
