@@ -1,4 +1,4 @@
--- Autokey v2.43 (Mini Boss: watch a name list e.g. Piccolo/Kraken, auto-warp and fight full-auto when one actually spawns): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.44 (Sidebar reorganized into 3 categories: "เป้าหมายใน Map" / "ดันเจี้ยน" / "อื่นๆ" for easier navigation): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -220,7 +220,7 @@ local function navCaption(order, text)
         TextXAlignment = Enum.TextXAlignment.Left,
     }, navList)
 end
-navCaption(0, "เป้าหมาย")
+navCaption(0, "เป้าหมายใน Map")
 
 local tabs = {}
 for i, target in ipairs(targets) do
@@ -232,9 +232,10 @@ for i, target in ipairs(targets) do
     }, navList)
     create("UICorner", {CornerRadius = UDim.new(0, 7)}, tabs[i])
 end
-navCaption(9, "ระบบเสริม")
+navCaption(10, "ดันเจี้ยน")
+navCaption(20, "อื่นๆ")
 local flightTab = create("TextButton", {
-    LayoutOrder = 10,
+    LayoutOrder = 21,
     Size = UDim2.fromOffset(145, 34),
     Text = "Flight / บิน", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
@@ -246,17 +247,17 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.43",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.44",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.43" or "Anti-AFK: OFF  •  v2.43")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.44" or "Anti-AFK: OFF  •  v2.44")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
 local duckTab = create("TextButton", {
-    LayoutOrder = 20, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 3, Size = UDim2.fromOffset(145, 34),
     Text = "Duck Boss / เป็ด", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
@@ -264,7 +265,7 @@ local duckTab = create("TextButton", {
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, duckTab)
 
 local skillsTab = create("TextButton", {
-    LayoutOrder = 30, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 22, Size = UDim2.fromOffset(145, 34),
     Text = "Skills / สกิล", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
@@ -272,7 +273,7 @@ local skillsTab = create("TextButton", {
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, skillsTab)
 
 local raidTab = create("TextButton", {
-    LayoutOrder = 40, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 11, Size = UDim2.fromOffset(145, 34),
     Text = "Raid / เสกบอส", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
@@ -665,7 +666,7 @@ end)()
 local dungeonPage = makePage()
 dungeonPage.Visible = false
 local dungeonTab = create("TextButton", {
-    LayoutOrder = 50, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 12, Size = UDim2.fromOffset(145, 34),
     Text = "Dungeon / ลงดัน", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
@@ -3829,7 +3830,7 @@ local gachaPage = makePage()
 gachaPage.Visible = false
 extraTabs.gachaPage = gachaPage
 local gachaTab = create("TextButton", {
-    LayoutOrder = 60, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 23, Size = UDim2.fromOffset(145, 34),
     Text = "Gacha / สุ่มของ", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
@@ -4155,7 +4156,7 @@ local craftPage = makePage()
 craftPage.Visible = false
 extraTabs.craftPage = craftPage
 local craftTab = create("TextButton", {
-    LayoutOrder = 70, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 24, Size = UDim2.fromOffset(145, 34),
     Text = "Craft / สูตรคราฟต์", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
@@ -4601,7 +4602,7 @@ local headPage = makePage()
 headPage.Visible = false
 extraTabs.headPage = headPage
 local headTab = create("TextButton", {
-    LayoutOrder = 80, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 5, Size = UDim2.fromOffset(145, 34),
     Text = "ยืนบนหัว / พิมพ์ชื่อ", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
@@ -4910,7 +4911,7 @@ local mbPage = makePage()
 mbPage.Visible = false
 extraTabs.mbPage = mbPage
 local mbTab = create("TextButton", {
-    LayoutOrder = 90, Size = UDim2.fromOffset(145, 34),
+    LayoutOrder = 4, Size = UDim2.fromOffset(145, 34),
     Text = "Mini Boss / เฝ้าเกิด", TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.Gotham, TextSize = 15,
     BackgroundColor3 = colors.tab, BorderSizePixel = 0,
