@@ -1,4 +1,4 @@
--- Autokey v2.42 (Head Stand: auto re-acquire same-name target on respawn instead of stopping when it dies): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.43 (Mini Boss: watch a name list e.g. Piccolo/Kraken, auto-warp and fight full-auto when one actually spawns): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.42",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.43",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.42" or "Anti-AFK: OFF  •  v2.42")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.43" or "Anti-AFK: OFF  •  v2.43")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -752,6 +752,10 @@ local function showPage(page)
     if extraTabs.headPage then
         extraTabs.headPage.Visible = page == "headstand"
         extraTabs.headTab.BackgroundColor3 = page == "headstand" and colors.active or colors.tab
+    end
+    if extraTabs.mbPage then
+        extraTabs.mbPage.Visible = page == "miniboss"
+        extraTabs.mbTab.BackgroundColor3 = page == "miniboss" and colors.active or colors.tab
     end
     dungeonPage.Visible = page == "dungeon"
     dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.tab
@@ -2412,7 +2416,7 @@ end
 -- คืนค่า "done" | "cancel" | "fail", ข้อความ
 local function raidRound(alive, pause, fight)
     local function ready()
-        if duck.enabled or auto then return false end
+        if duck.enabled or auto or raid.miniBossRunning then return false end
         return true
     end
 
@@ -3331,7 +3335,7 @@ end
 -- หนึ่งรอบ: เปิดหน้า Dungeon -> ใส่ Orb -> Spawn -> เข้าวง -> (fight) เปิด Auto Skip -> สู้จนจบ
 local function dungeonRound(alive, pause, fight)
     local function ready()
-        return not (duck.enabled or auto or raid.running)
+        return not (duck.enabled or auto or raid.running or raid.miniBossRunning)
     end
     raid.ignore = {}
     raid.hoverPart = nil
@@ -4901,6 +4905,290 @@ end)
 headTab.Activated:Connect(function() showPage("headstand") end)
 end)()
 
+;(function()
+local mbPage = makePage()
+mbPage.Visible = false
+extraTabs.mbPage = mbPage
+local mbTab = create("TextButton", {
+    LayoutOrder = 90, Size = UDim2.fromOffset(145, 34),
+    Text = "Mini Boss / เฝ้าเกิด", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, mbTab)
+extraTabs.mbTab = mbTab
+
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+    Text = "Mini Boss / เฝ้าเกิดแล้ววาป", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 18,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, mbPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 32),
+    BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
+    TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "ไม่ต้องสนเวลาเกิด ระบบจะคอยสแกนหาชื่อในลิสต์ พอเกิดจริงจะวาร์ปไปตีให้อัตโนมัติ",
+}, mbPage)
+
+local mbNames = create("TextBox", {
+    Position = UDim2.fromOffset(0, 62), Size = UDim2.new(1, 0, 0, 32),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "", ClearTextOnFocus = false,
+    PlaceholderText = "ชื่อบอส คั่นด้วย , เช่น Piccolo, Kraken",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, mbPage)
+create("UIPadding", {PaddingLeft = UDim.new(0, 8)}, mbNames)
+
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 100), Size = UDim2.fromOffset(280, 26),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "ความสูงเหนือหัว (studs)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, mbPage)
+local mbHeight = create("TextBox", {
+    Position = UDim2.new(1, -90, 0, 100), Size = UDim2.fromOffset(90, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "20", ClearTextOnFocus = false,
+}, mbPage)
+
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 132), Size = UDim2.fromOffset(280, 26),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "จำนวนตัวสูงสุด (0 = ไม่จำกัด)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, mbPage)
+local mbMax = create("TextBox", {
+    Position = UDim2.new(1, -90, 0, 132), Size = UDim2.fromOffset(90, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "0", ClearTextOnFocus = false,
+}, mbPage)
+
+local mbButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 166), Size = UDim2.new(1, 0, 0, 36),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 15, Text = "MINI BOSS AUTO: OFF — กดเพื่อเริ่ม",
+}, mbPage)
+local mbStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 210), Size = UDim2.new(1, 0, 0, 160),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "ใส่ชื่อบอส (คั่นด้วย ,) แล้วกด AUTO ครับ ไม่ต้องเปิดหน้าเกมค้างไว้ก็ได้\nระบบจะยืม อาวุธที่ถือ/บัฟ J/อาวุธเสริมบัฟ จากหน้า Raid มาใช้ด้วยถ้าเปิดไว้",
+}, mbPage)
+
+-- แปลง "Piccolo, Kraken" เป็นลิสต์ชื่อ
+local function parseMiniBossNames(text)
+    local names = {}
+    for name in text:gmatch("[^,]+") do
+        name = name:gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" then table.insert(names, name) end
+    end
+    return names
+end
+
+-- หาบอสที่ชื่อ "ตรงเป๊ะ" กับชื่อใดชื่อหนึ่งในลิสต์ (กันจับผิดตัวถ้าตั้งหลายชื่อพร้อมกัน)
+local function findMiniBoss(root, names)
+    local wanted = {}
+    for _, n in ipairs(names) do wanted[normalizeDuck(n)] = true end
+    local best, bestDist
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
+            if wanted[normalizeDuck(model.Name)] or wanted[normalizeDuck(humanoid.DisplayName)] then
+                local part = getPart(model)
+                if part then
+                    local d = (root.Position - part.Position).Magnitude
+                    if not bestDist or d < bestDist then
+                        best, bestDist = {model = model, humanoid = humanoid, part = part, distance = d}, d
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local mb = {running = false, token = 0, rounds = 0}
+
+local function stopMiniBoss(message)
+    mb.token += 1
+    mb.running = false
+    raid.fighting = false
+    raid.hoverPart = nil
+    raid.miniBossRunning = false
+    releaseSkillKeys()
+    mbButton.Text = "MINI BOSS AUTO: OFF — กดเพื่อเริ่ม"
+    mbButton.BackgroundColor3 = colors.blue
+    if message then mbStatus.Text = message end
+end
+
+local function startMiniBoss()
+    if normalizeDuck(mbNames.Text) == "" then
+        mbStatus.Text = "ใส่ชื่อบอสก่อนครับ (คั่นด้วย , เช่น Piccolo, Kraken)"
+        return
+    end
+    setAuto(false)
+    if flight then stopFlight("ปิดบินเพื่อเปิด Mini Boss Auto") end
+    if stopDuck then stopDuck("หยุดเสกเป็ดเพื่อเปิด Mini Boss Auto") end
+    if raid.running and raid.stop then raid.stop("หยุด Raid เพื่อเปิด Mini Boss Auto") end
+    if dungeon.running and dungeon.stop then dungeon.stop("หยุด Dungeon เพื่อเปิด Mini Boss Auto") end
+
+    mb.token += 1
+    local token = mb.token
+    mb.running = true
+    mb.rounds = 0
+    raid.miniBossRunning = true
+    mbButton.Text = "MINI BOSS AUTO: ON — กดเพื่อหยุด"
+    mbButton.BackgroundColor3 = colors.green
+    mbStatus.Text = "กำลังรอบอสเกิด..."
+
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local function alive() return running and mb.running and mb.token == token end
+            local nextRefresh, nextEquip = 0, 0
+            local track = {humanoid = nil, hp = 0, since = 0}
+            local readySince, sticky = nil, nil
+            while alive() do
+                if duck.enabled or auto or raid.running or dungeon.running then
+                    raid.fighting = false
+                    mbStatus.Text = "รอ: ปิด AUTO เป้าหมาย/Duck/Raid/Dungeon อื่นก่อนครับ"
+                    task.wait(1)
+                elseif not player.Character then
+                    mbStatus.Text = "รอตัวละครพร้อม..."
+                    task.wait(0.5)
+                else
+                    local character, root = duckCharacter()
+                    if not character then
+                        mbStatus.Text = "รอตัวละครพร้อม..."
+                        task.wait(0.5)
+                    else
+                        local names = parseMiniBossNames(mbNames.Text)
+                        if #names == 0 then
+                            mbStatus.Text = "ใส่ชื่อบอสก่อนครับ"
+                            task.wait(1)
+                        else
+                            local now = os.clock()
+                            if now >= nextRefresh then
+                                nextRefresh = now + 2
+                                refreshTracked()
+                            end
+                            if sticky and not (sticky.humanoid.Health > 0
+                                and sticky.humanoid:IsDescendantOf(workspace)) then
+                                if sticky.humanoid.Health <= 0 then
+                                    mb.rounds += 1
+                                    mbStatus.Text = "จัดการ " .. sticky.model.Name .. " สำเร็จ (" .. mb.rounds .. " ตัว) • กำลังรอบอสเกิดใหม่..."
+                                end
+                                sticky = nil
+                            end
+                            local maxRounds = math.max(0, math.floor(tonumber(mbMax.Text) or 0))
+                            if maxRounds > 0 and mb.rounds >= maxRounds then
+                                mbStatus.Text = "ครบ " .. mb.rounds .. " ตัวตามที่ตั้งไว้ ปิด AUTO แล้ว"
+                                return
+                            end
+                            local target = sticky or findMiniBoss(root, names)
+                            if not target then
+                                raid.fighting = false
+                                raid.hoverPart = nil
+                                readySince = nil
+                                mbStatus.Text = "กำลังรอบอสเกิด: " .. table.concat(names, ", ") .. " ... (สำเร็จแล้ว " .. mb.rounds .. " ตัว)"
+                                task.wait(1)
+                            else
+                                sticky = target
+                                if now >= nextEquip then
+                                    nextEquip = now + 1
+                                    equipRaidWeapon(character)
+                                end
+                                if track.humanoid ~= target.humanoid then
+                                    track = {humanoid = target.humanoid, hp = target.humanoid.Health, since = now}
+                                    readySince = nil
+                                    raid.combatReady = false
+                                    releaseSkillKeys()
+                                    mbStatus.Text = "เจอ " .. target.model.Name .. "! กำลังวาร์ปไปตี..."
+                                    -- บัฟก่อนตีบอสตัวนี้ (เหมือนหน้า Raid): อาวุธเสริมบัฟก่อน แล้วอาวุธหลัก + บัฟ J
+                                    if raid.buffWeapon and normalizeDuck(raid.buffWeaponName.Text) ~= "" then
+                                        equipRaidWeapon(character, raid.buffWeaponName.Text)
+                                        task.wait(0.5)
+                                        local buffWeaponKey = raid.buffWeaponKeyBox.Text ~= "" and raid.buffWeaponKeyBox.Text or "F"
+                                        tapKey(buffWeaponKey)
+                                        task.wait(0.4)
+                                        equipRaidWeapon(character)
+                                        task.wait(0.3)
+                                    end
+                                    if raid.buff then
+                                        equipRaidWeapon(character)
+                                        task.wait(0.4)
+                                        tapKey(RAID_BUFF_KEY)
+                                        task.wait(0.3)
+                                    end
+                                end
+                                local health = target.humanoid.Health
+                                if health < track.hp - 0.5 then
+                                    track.hp = health; track.since = now
+                                elseif health > track.hp then
+                                    track.hp = health
+                                end
+                                if now - track.since > 20 then
+                                    warn("Mini Boss: ข้ามเป้าหมายที่ไม่ลดเลือด " .. target.model.Name)
+                                    mbStatus.Text = "ข้าม " .. target.model.Name .. " (เลือดไม่ลดนาน 20 วิ)"
+                                    sticky = nil
+                                    task.wait(0.5)
+                                else
+                                    raid.fighting = true
+                                    raid.hoverPart = target.part
+                                    raid.hoverOffset = math.clamp(tonumber(mbHeight.Text) or 20, 3, 300)
+                                    readySince = readySince or now
+                                    if now - readySince >= 0.6 then raid.combatReady = true end
+                                    if raid.combatReady then
+                                        mbStatus.Text = string.format("กำลังตี %s\nHP %.0f/%.0f • สำเร็จแล้ว %d ตัว",
+                                            target.model.Name, health, target.humanoid.MaxHealth, mb.rounds)
+                                        useDuckSkill(character, root, target)
+                                    else
+                                        mbStatus.Text = "เข้าตำแหน่งเหนือหัว: " .. target.model.Name
+                                    end
+                                    task.wait(0.25)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        raid.fighting = false
+        raid.hoverPart = nil
+        raid.miniBossRunning = false
+        releaseSkillKeys()
+        if not ok then
+            mbStatus.Text = "เกิด Error หยุดระบบ ดู Console"
+            warn("Mini Boss:", err)
+        end
+        mb.running = false
+        mbButton.Text = "MINI BOSS AUTO: OFF — กดเพื่อเริ่ม"
+        mbButton.BackgroundColor3 = colors.blue
+    end)
+end
+
+mbButton.Activated:Connect(function()
+    if mb.running then
+        stopMiniBoss("หยุด Mini Boss Auto แล้ว")
+    else
+        startMiniBoss()
+    end
+end)
+mbHeight.FocusLost:Connect(function()
+    mbHeight.Text = tostring(math.clamp(tonumber(mbHeight.Text) or 20, 3, 300))
+end)
+mbMax.FocusLost:Connect(function()
+    mbMax.Text = tostring(math.max(0, math.floor(tonumber(mbMax.Text) or 0)))
+end)
+mbTab.Activated:Connect(function() showPage("miniboss") end)
+end)()
 
 
 local function autoStep(entries)
