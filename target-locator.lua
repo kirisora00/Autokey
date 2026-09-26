@@ -1,4 +1,4 @@
--- Autokey v2.44 (Sidebar reorganized into 3 categories: "เป้าหมายใน Map" / "ดันเจี้ยน" / "อื่นๆ" for easier navigation): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.45 (Mini Boss can now run concurrently with target AUTO/Devil Boat follow: boat-auto pauses only while Mini Boss is actively engaging a spawned target, then resumes on its own): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.44",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.45",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.44" or "Anti-AFK: OFF  •  v2.44")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.45" or "Anti-AFK: OFF  •  v2.45")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -4929,7 +4929,7 @@ create("TextLabel", {
     Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 32),
     BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ไม่ต้องสนเวลาเกิด ระบบจะคอยสแกนหาชื่อในลิสต์ พอเกิดจริงจะวาร์ปไปตีให้อัตโนมัติ",
+    Text = "ไม่ต้องสนเวลาเกิด ระบบจะคอยสแกนหาชื่อในลิสต์ พอเกิดจริงจะวาร์ปไปตีให้อัตโนมัติ\nเปิดคู่กับ AUTO เป้าหมาย (เช่นตี Devil Boat) ได้เลย: ปกติตีเรือรอไปเรื่อยๆ พอ Mini Boss เกิดจะแย่งไปตีก่อน ตายแล้วกลับไปตีเรือต่อเอง",
 }, mbPage)
 
 local mbNames = create("TextBox", {
@@ -5035,7 +5035,8 @@ local function startMiniBoss()
         mbStatus.Text = "ใส่ชื่อบอสก่อนครับ (คั่นด้วย , เช่น Piccolo, Kraken)"
         return
     end
-    setAuto(false)
+    -- ไม่ปิด AUTO เป้าหมาย (เช่น ตี Devil Boat) แล้ว เพื่อให้เปิดคู่กันได้:
+    -- ตีเรือรอไปเรื่อยๆ พอ Mini Boss เกิดค่อยแย่งควบคุมไปตีชั่วคราว (ดูจุดกัน AUTO ที่ autoStep/Heartbeat ด้านล่าง)
     if flight then stopFlight("ปิดบินเพื่อเปิด Mini Boss Auto") end
     if stopDuck then stopDuck("หยุดเสกเป็ดเพื่อเปิด Mini Boss Auto") end
     if raid.running and raid.stop then raid.stop("หยุด Raid เพื่อเปิด Mini Boss Auto") end
@@ -5057,9 +5058,9 @@ local function startMiniBoss()
             local track = {humanoid = nil, hp = 0, since = 0}
             local readySince, sticky = nil, nil
             while alive() do
-                if duck.enabled or auto or raid.running or dungeon.running then
+                if duck.enabled or raid.running or dungeon.running then
                     raid.fighting = false
-                    mbStatus.Text = "รอ: ปิด AUTO เป้าหมาย/Duck/Raid/Dungeon อื่นก่อนครับ"
+                    mbStatus.Text = "รอ: ปิด Duck/Raid/Dungeon อื่นก่อนครับ (เปิดคู่กับ AUTO เป้าหมาย/ตีเรือได้ปกติ)"
                     task.wait(1)
                 elseif not player.Character then
                     mbStatus.Text = "รอตัวละครพร้อม..."
@@ -5194,6 +5195,12 @@ end)()
 
 local function autoStep(entries)
     if not auto then return end
+    -- Mini Boss แย่งควบคุมตำแหน่งอยู่ (raid.fighting) ให้ AUTO เป้าหมายหยุดรอชั่วคราว
+    -- แล้วกลับมาตีเป้าหมายเดิมต่อเองทันทีที่ Mini Boss ปล่อยควบคุม (ไม่ต้องหาใหม่)
+    if raid.fighting then
+        status.Text = "AUTO: หยุดชั่วคราว (Mini Boss กำลังตี) จะตีต่ออัตโนมัติ"
+        return
+    end
 
     -- Removal from the client Workspace also counts as a departed target.
     -- เป้าหมายที่ล็อกไว้จะไม่เปลี่ยน จนกว่าจะตายหรือหายไปจาก Workspace
@@ -5251,6 +5258,7 @@ table.insert(flightConnections, RunService.Heartbeat:Connect(function()
     if not running or not auto or not locked then return end
     if not targets[selected].follow then return end
     if flight or duck.enabled then return end
+    if raid.fighting then return end -- Mini Boss กำลังตีอยู่ เว้น AUTO เป้าหมายไว้ก่อน
     if os.clock() < nextWarpAt then return end
 
     local character = player.Character
