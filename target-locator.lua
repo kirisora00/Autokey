@@ -1,4 +1,4 @@
--- Autokey v2.41 (fix: buff-weapon toggle button not responding to click - added redundant listener + debounce + error surfacing): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.42 (Head Stand: auto re-acquire same-name target on respawn instead of stopping when it dies): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -246,12 +246,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.41",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.42",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.41" or "Anti-AFK: OFF  •  v2.41")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.42" or "Anti-AFK: OFF  •  v2.42")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -4749,12 +4749,17 @@ local function scanNearby(root, radius)
     return rows
 end
 
-local hs = {enabled = false, part = nil, humanoid = nil, name = "", offset = 6}
+-- reacquireUntil: ตั้งไว้ตอนเป้าหมายตาย/หายไป เพื่อรอเป้าหมายชื่อเดิมเกิดใหม่แทนที่จะหยุดเลย
+-- nextReacquireAt: กันสแกนหาชื่อใหม่ทุกเฟรม (แพง) ให้สแกนแค่ ~1 ครั้ง/วินาทีตอนรอ
+local hs = {enabled = false, part = nil, humanoid = nil, name = "", offset = 6,
+    reacquireUntil = nil, nextReacquireAt = 0}
+local REACQUIRE_TIMEOUT = 60 -- วินาที: รอเป้าหมายชื่อเดิมเกิดใหม่นานสุดก่อนยอมหยุด
 
 local function stopHeadstand(message)
     hs.enabled = false
     hs.part = nil
     hs.humanoid = nil
+    hs.reacquireUntil = nil
     headGoButton.Text = "ไปยืนบนหัว (ตามชื่อ)"
     headGoButton.BackgroundColor3 = colors.blue
     headStatus.Text = message or "หยุดยืนบนหัวแล้ว"
@@ -4770,6 +4775,8 @@ local function startHeadstand(entry, message)
     hs.humanoid = entry.humanoid
     hs.name = entry.model.Name
     hs.enabled = true
+    hs.reacquireUntil = nil
+    hs.nextReacquireAt = 0
     local character = player.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if root then
@@ -4783,12 +4790,44 @@ local function startHeadstand(entry, message)
 end
 
 -- ล็อกให้ตัวละครลอยอยู่เหนือหัวเป้าหมายทุกเฟรม ตามเป้าหมายที่เคลื่อนที่ (เหมือนระบบเกาะเหนือหัวบอสของ Raid)
+-- ถ้าเป้าหมายตาย/หายไป: ไม่หยุดทันที แต่รอ (สูงสุด 60 วิ) แล้วหาเป้าหมายชื่อเดิมที่เกิดใหม่มายืนต่อให้เอง
 table.insert(flightConnections, RunService.Heartbeat:Connect(function()
-    if not running or not hs.enabled or not hs.part then return end
-    if not hs.part.Parent or not (hs.humanoid and hs.humanoid.Parent and hs.humanoid.Health > 0) then
-        stopHeadstand("เป้าหมายหายไปหรือตายแล้ว หยุดระบบยืนบนหัว")
+    if not running or not hs.enabled then return end
+    local lost = not hs.part or not hs.part.Parent
+        or not (hs.humanoid and hs.humanoid.Parent and hs.humanoid.Health > 0)
+    if lost then
+        hs.part = nil
+        hs.humanoid = nil
+        local character = player.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local now = os.clock()
+        if not hs.reacquireUntil then
+            hs.reacquireUntil = now + REACQUIRE_TIMEOUT
+            hs.nextReacquireAt = 0
+            headGoButton.Text = "รอ \"" .. hs.name .. "\" เกิดใหม่... (กดหยุดเพื่อยกเลิก)"
+            headGoButton.BackgroundColor3 = colors.active
+            headStatus.Text = "เป้าหมาย \"" .. hs.name .. "\" ตายหรือหายไป กำลังรอตัวใหม่ชื่อเดิมเกิด (สูงสุด "
+                .. REACQUIRE_TIMEOUT .. " วิ)..."
+        end
+        if now > hs.reacquireUntil then
+            stopHeadstand("รอ \"" .. hs.name .. "\" เกิดใหม่นานเกินไป หยุดระบบยืนบนหัว")
+            return
+        end
+        if now < hs.nextReacquireAt then return end
+        hs.nextReacquireAt = now + 1 -- สแกนหาชื่อใหม่แค่ ~1 ครั้ง/วินาที กันกระตุก
+        local entry = findByName(root, hs.name)
+        if entry then
+            hs.part = entry.part
+            hs.humanoid = entry.humanoid
+            hs.reacquireUntil = nil
+            headGoButton.Text = "กำลังยืนบนหัว: " .. hs.name .. " (กดหาใหม่เพื่อเปลี่ยน)"
+            headGoButton.BackgroundColor3 = colors.green
+            headStatus.Text = "เจอ \"" .. hs.name .. "\" ตัวใหม่แล้ว กลับไปยืนบนหัวต่อ"
+        end
         return
     end
+    hs.reacquireUntil = nil
     local character = player.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
