@@ -1,4 +1,4 @@
--- Autokey v2.45 (Mini Boss can now run concurrently with target AUTO/Devil Boat follow: boat-auto pauses only while Mini Boss is actively engaging a spawned target, then resumes on its own): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.46 (New Shop Dungeon Auto Buy tab: open the Shop Dungeon window and it auto-clicks every purchase row, by name filter/max-per-item/min-points-to-keep; runs independently, no conflict with any other system): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.45",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.46",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.45" or "Anti-AFK: OFF  •  v2.45")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.46" or "Anti-AFK: OFF  •  v2.46")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -757,6 +757,10 @@ local function showPage(page)
     if extraTabs.mbPage then
         extraTabs.mbPage.Visible = page == "miniboss"
         extraTabs.mbTab.BackgroundColor3 = page == "miniboss" and colors.active or colors.tab
+    end
+    if extraTabs.shopPage then
+        extraTabs.shopPage.Visible = page == "shop"
+        extraTabs.shopTab.BackgroundColor3 = page == "shop" and colors.active or colors.tab
     end
     dungeonPage.Visible = page == "dungeon"
     dungeonTab.BackgroundColor3 = page == "dungeon" and colors.active or colors.tab
@@ -5190,6 +5194,275 @@ mbMax.FocusLost:Connect(function()
     mbMax.Text = tostring(math.max(0, math.floor(tonumber(mbMax.Text) or 0)))
 end)
 mbTab.Activated:Connect(function() showPage("miniboss") end)
+end)()
+
+-- ===== Shop Dungeon Auto Buy: ไล่กดซื้อของในร้าน Shop Dungeon ให้อัตโนมัติ ไม่ต้องกดทีละอัน =====
+-- ไม่แตะตำแหน่งตัวละครเลย (แค่กดปุ่ม GUI) จึงเปิดคู่กับระบบอื่น (AUTO เป้าหมาย/Mini Boss/Duck ฯลฯ) ได้ตลอด ไม่ชนกัน
+;(function()
+local shopTab = create("TextButton", {
+    LayoutOrder = 13, Size = UDim2.fromOffset(145, 34),
+    Text = "Shop Dungeon / ซื้อของ", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 15,
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, shopTab)
+extraTabs.shopTab = shopTab
+
+local shopPage = makePage()
+shopPage.Visible = false
+extraTabs.shopPage = shopPage
+
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+    Text = "Shop Dungeon / ซื้อของอัตโนมัติ", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 18,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, shopPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 40),
+    BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
+    TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "เดินไปกด E ที่ Shop Dungeon แล้วกด Open ค้างหน้าต่างไว้ก่อนครับ ระบบจะไล่กดซื้อทุกแถวที่เจอให้เอง ไม่ต้องเลื่อนดูของที่ซ่อนอยู่",
+}, shopPage)
+
+local shopNames = create("TextBox", {
+    Position = UDim2.fromOffset(0, 70), Size = UDim2.new(1, 0, 0, 32),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "", ClearTextOnFocus = false,
+    PlaceholderText = "ชื่อไอเทมที่จะซื้อ คั่นด้วย , (เว้นว่าง = ซื้อทุกอย่างในร้าน)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, shopPage)
+create("UIPadding", {PaddingLeft = UDim.new(0, 8)}, shopNames)
+
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 108), Size = UDim2.fromOffset(280, 26),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "ซื้อสูงสุดกี่ครั้งต่อไอเทม (0 = ไม่จำกัด)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, shopPage)
+local shopMaxEach = create("TextBox", {
+    Position = UDim2.new(1, -90, 0, 108), Size = UDim2.fromOffset(90, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "0", ClearTextOnFocus = false,
+}, shopPage)
+
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 140), Size = UDim2.fromOffset(280, 26),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, Text = "เหลือ Point ขั้นต่ำไว้ (กันซื้อจนหมด)",
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, shopPage)
+local shopKeepPoints = create("TextBox", {
+    Position = UDim2.new(1, -90, 0, 140), Size = UDim2.fromOffset(90, 26),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "0", ClearTextOnFocus = false,
+}, shopPage)
+
+local shopButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 174), Size = UDim2.new(1, 0, 0, 36),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 15, Text = "AUTO BUY: OFF — กดเพื่อเริ่ม",
+}, shopPage)
+local shopStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 218), Size = UDim2.new(1, 0, 0, 150),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "เปิดหน้าร้าน Shop Dungeon ค้างไว้ แล้วกด AUTO BUY ได้เลยครับ",
+}, shopPage)
+
+-- แปลง "Rope, Cow Leather" เป็นลิสต์ชื่อ (เว้นว่างทั้งช่อง = ซื้อทุกไอเทม)
+local function parseShopNames(text)
+    local names = {}
+    for name in text:gmatch("[^,]+") do
+        name = name:gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" then table.insert(names, name) end
+    end
+    return names
+end
+
+-- ปุ่มซื้อในร้านเป็นแบบ "1 Point" / "2 Point" เสมอ: ตัดช่องว่าง/เครื่องหมายออกแล้วจับรูปแบบ "<ตัวเลข>point"
+local function shopButtonPrice(obj)
+    if not obj:IsA("GuiButton") or not guiVisible(obj) then return nil end
+    return normalizeDuck(buttonText(obj)):match("^(%d+)point$")
+end
+
+-- หากรอบหน้าต่างร้าน Shop Dungeon: ไต่ขึ้นจากป้ายหัวข้อ "Shop Dungeon" จนเจอกรอบที่มีปุ่มราคาอยู่ด้วย
+-- (กันจับป้ายชื่อ NPC ลอยเหนือหัวที่ซ้ำชื่อกันแต่ไม่มีปุ่มซื้อ)
+local function findShopWindow()
+    for _, label in ipairs(playerGui:GetDescendants()) do
+        if label:IsA("TextLabel") and not label:IsDescendantOf(gui) and guiVisible(label)
+            and stripRichText(label.Text) == "Shop Dungeon" then
+            local scope = label.Parent
+            for _ = 1, 6 do
+                if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
+                for _, obj in ipairs(scope:GetDescendants()) do
+                    if shopButtonPrice(obj) then return scope end
+                end
+                scope = scope.Parent
+            end
+        end
+    end
+    return nil
+end
+
+-- อ่านยอด Dungeon Point ปัจจุบันจากป้าย "Dungeon Point: 990" ในกรอบร้าน
+local function findShopBalance(scope)
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("TextLabel") and guiVisible(obj) then
+            local value = normalizeDuck(stripRichText(obj.Text)):match("^dungeonpoint(%d+)$")
+            if value then return tonumber(value) end
+        end
+    end
+    return nil
+end
+
+-- ไล่เก็บทุกแถวในร้าน (ชื่อไอเทม + ราคา + ปุ่ม) ครั้งเดียวจบ แล้วจับคู่ชื่อกับปุ่มที่อยู่แถวเดียวกัน
+-- (เทคนิคเดียวกับ Craft Tracker: ชื่อไอเทมมักอยู่ซ้ายมือของปุ่ม ระดับความสูง Y ใกล้เคียงกัน)
+local function scanShopRows(scope)
+    local priceButtons, nameCandidates = {}, {}
+    for _, obj in ipairs(scope:GetDescendants()) do
+        if obj:IsA("GuiButton") then
+            local price = shopButtonPrice(obj)
+            if price then table.insert(priceButtons, {button = obj, price = tonumber(price)}) end
+        elseif obj:IsA("TextLabel") and guiVisible(obj) then
+            local text = stripRichText(obj.Text)
+            if text ~= "" and text ~= "Shop Dungeon"
+                and not normalizeDuck(text):match("^dungeonpoint%d+$") then
+                table.insert(nameCandidates, obj)
+            end
+        end
+    end
+    local rows = {}
+    for _, entry in ipairs(priceButtons) do
+        local btn = entry.button
+        local by = btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2
+        local bx = btn.AbsolutePosition.X
+        local nameLabel, nameX
+        for _, obj in ipairs(nameCandidates) do
+            local oy = obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2
+            if math.abs(oy - by) <= 40 and obj.AbsolutePosition.X < bx then
+                if not nameX or obj.AbsolutePosition.X > nameX then
+                    nameLabel, nameX = obj, obj.AbsolutePosition.X
+                end
+            end
+        end
+        table.insert(rows, {
+            button = btn, price = entry.price, y = by,
+            name = nameLabel and stripRichText(nameLabel.Text) or ("ไอเทมแถวที่ " .. (#rows + 1)),
+        })
+    end
+    table.sort(rows, function(a, b) return a.y < b.y end)
+    return rows
+end
+
+local shop = {running = false, token = 0, bought = 0, counts = {}}
+
+local function stopShopBuy(message)
+    shop.token += 1
+    shop.running = false
+    shopButton.Text = "AUTO BUY: OFF — กดเพื่อเริ่ม"
+    shopButton.BackgroundColor3 = colors.blue
+    if message then shopStatus.Text = message end
+end
+
+local function startShopBuy()
+    shop.token += 1
+    local token = shop.token
+    shop.running = true
+    shop.bought = 0
+    table.clear(shop.counts)
+    shopButton.Text = "AUTO BUY: ON — กดเพื่อหยุด"
+    shopButton.BackgroundColor3 = colors.green
+    shopStatus.Text = "กำลังหาหน้าร้าน Shop Dungeon..."
+
+    task.spawn(function()
+        local function alive() return running and shop.running and shop.token == token end
+        local ok, err = pcall(function()
+            while alive() do
+                local scope = findShopWindow()
+                if not scope then
+                    shopStatus.Text = "ไม่พบหน้าร้าน Shop Dungeon ที่เปิดอยู่ เดินไปกด E แล้ว Open ค้างไว้ก่อนครับ"
+                    task.wait(1)
+                else
+                    local rows = scanShopRows(scope)
+                    if #rows == 0 then
+                        shopStatus.Text = "เจอหน้าร้านแต่ยังอ่านรายการไอเทมไม่ได้ ลองปิดแล้วเปิดร้านใหม่"
+                        task.wait(1)
+                    else
+                        local balance = findShopBalance(scope)
+                        local wanted = parseShopNames(shopNames.Text)
+                        local wantedSet = nil
+                        if #wanted > 0 then
+                            wantedSet = {}
+                            for _, n in ipairs(wanted) do wantedSet[normalizeDuck(n)] = true end
+                        end
+                        local maxEach = math.max(0, math.floor(tonumber(shopMaxEach.Text) or 0))
+                        local keepPoints = math.max(0, math.floor(tonumber(shopKeepPoints.Text) or 0))
+                        local budget = balance and (balance - keepPoints) or math.huge
+
+                        local bestRow = nil
+                        for _, row in ipairs(rows) do
+                            local matches = not wantedSet or wantedSet[normalizeDuck(row.name)]
+                            if matches then
+                                local boughtCount = shop.counts[row.name] or 0
+                                if (maxEach == 0 or boughtCount < maxEach) and row.price <= budget then
+                                    bestRow = row
+                                    break
+                                end
+                            end
+                        end
+
+                        if not bestRow then
+                            shopStatus.Text = string.format(
+                                "รอ... Point ปัจจุบัน %s (ซื้อไปแล้ว %d ชิ้น) ไม่มีไอเทมที่ซื้อได้ตอนนี้ (Point ไม่พอ/ซื้อครบตามที่ตั้งไว้แล้ว)",
+                                balance and tostring(balance) or "?", shop.bought
+                            )
+                            task.wait(1.5)
+                        else
+                            pressGuiButton(bestRow.button)
+                            shop.bought += 1
+                            shop.counts[bestRow.name] = (shop.counts[bestRow.name] or 0) + 1
+                            shopStatus.Text = string.format(
+                                "ซื้อ %s แล้ว %d ครั้ง (ราคา %d/ครั้ง) • รวมซื้อไปแล้ว %d ชิ้น • Point เหลือประมาณ %s",
+                                bestRow.name, shop.counts[bestRow.name], bestRow.price, shop.bought,
+                                balance and tostring(balance - bestRow.price) or "?"
+                            )
+                            task.wait(0.25)
+                        end
+                    end
+                end
+            end
+        end)
+        if not ok then
+            shopStatus.Text = "เกิด Error หยุดระบบ ดู Console"
+            warn("Shop Auto Buy:", err)
+        end
+        shop.running = false
+        shopButton.Text = "AUTO BUY: OFF — กดเพื่อเริ่ม"
+        shopButton.BackgroundColor3 = colors.blue
+    end)
+end
+
+shopButton.Activated:Connect(function()
+    if shop.running then
+        stopShopBuy("หยุด Auto Buy แล้ว")
+    else
+        startShopBuy()
+    end
+end)
+shopMaxEach.FocusLost:Connect(function()
+    shopMaxEach.Text = tostring(math.max(0, math.floor(tonumber(shopMaxEach.Text) or 0)))
+end)
+shopKeepPoints.FocusLost:Connect(function()
+    shopKeepPoints.Text = tostring(math.max(0, math.floor(tonumber(shopKeepPoints.Text) or 0)))
+end)
+shopTab.Activated:Connect(function() showPage("shop") end)
 end)()
 
 
