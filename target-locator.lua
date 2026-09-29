@@ -1,4 +1,4 @@
--- Autokey v2.48 (NPC พิเศษ is talk-based, not combat: warps next to the NPC using the same warp() as Villain/Devil Boat targeting, then holds its own ProximityPrompt E for you; no more fighting/buff-weapon logic, still yields to Mini Boss via raid.fighting): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.49 (Fixed a deadlock bug: Mini Boss left raid.fighting stuck true after a target died/went stale, which permanently blocked NPC พิเศษ/AUTO เป้าหมาย from ever acting again. Also added ESP name+distance markers for NPC พิเศษ, visible map-wide/through walls like the Villain/Devil Boat markers): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.48",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.49",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.48" or "Anti-AFK: OFF  •  v2.48")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.49" or "Anti-AFK: OFF  •  v2.49")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -5096,6 +5096,11 @@ local function startMiniBoss()
                                     mbStatus.Text = "จัดการ " .. sticky.model.Name .. " สำเร็จ (" .. mb.rounds .. " ตัว) • กำลังรอบอสเกิดใหม่..."
                                 end
                                 sticky = nil
+                                -- สำคัญ: ต้องปล่อย raid.fighting คืนทันทีตรงนี้ ไม่งั้นค้างเป็น true ต่อไปเรื่อยๆ
+                                -- (ตัวเองจะเข้าใจผิดว่า "ระบบอื่นกำลังตีอยู่" ที่เช็คด้านล่าง แล้วไม่ยอมหาเป้าหมายใหม่อีกเลย
+                                -- ระบบอื่น เช่น NPC พิเศษ/AUTO เป้าหมาย ก็จะค้างรอไม่ทำงานตามไปด้วยเพราะเห็น raid.fighting เป็น true ตลอด)
+                                raid.fighting = false
+                                raid.hoverPart = nil
                             end
                             local maxRounds = math.max(0, math.floor(tonumber(mbMax.Text) or 0))
                             if maxRounds > 0 and mb.rounds >= maxRounds then
@@ -5152,6 +5157,8 @@ local function startMiniBoss()
                                     warn("Mini Boss: ข้ามเป้าหมายที่ไม่ลดเลือด " .. target.model.Name)
                                     mbStatus.Text = "ข้าม " .. target.model.Name .. " (เลือดไม่ลดนาน 20 วิ)"
                                     sticky = nil
+                                    raid.fighting = false
+                                    raid.hoverPart = nil
                                     task.wait(0.5)
                                 else
                                     raid.fighting = true
@@ -5227,14 +5234,14 @@ create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left,
 }, npcPage)
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 44),
+    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 82),
     BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "สำหรับ NPC คุยได้ที่สุ่มเกิดแล้วหายไว (กวาดหาถี่มาก) พอเจอชื่อในลิสต์จะวาร์ปไปยืนใกล้ๆ แล้วกดค้าง E คุยให้อัตโนมัติ (ไม่ตี)\nเปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ",
+    Text = "สำหรับ NPC คุยได้ที่สุ่มเกิดแล้วหายไว (กวาดหาถี่มาก) พอเจอชื่อในลิสต์จะวาร์ปไปยืนใกล้ๆ แล้วกดค้าง E คุยให้อัตโนมัติ (ไม่ตี)\nระหว่างเปิด AUTO จะขึ้นป้ายชื่อ+ระยะห่างเหนือหัว NPC ที่เจอด้วย เห็นได้ทั้งแมพ/ทะลุกำแพงเหมือนป้ายหน้า Villain/Devil Boat\nเปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ",
 }, npcPage)
 
 local npcNames = create("TextBox", {
-    Position = UDim2.fromOffset(0, 74), Size = UDim2.new(1, 0, 0, 32),
+    Position = UDim2.fromOffset(0, 112), Size = UDim2.new(1, 0, 0, 32),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "Vegeta, Bardock, Goten, Gohan", ClearTextOnFocus = false,
@@ -5244,26 +5251,26 @@ local npcNames = create("TextBox", {
 create("UIPadding", {PaddingLeft = UDim.new(0, 8)}, npcNames)
 
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 112), Size = UDim2.fromOffset(280, 26),
+    Position = UDim2.fromOffset(0, 150), Size = UDim2.fromOffset(280, 26),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, Text = "จำนวนครั้งสูงสุด (0 = ไม่จำกัด)",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, npcPage)
 local npcMax = create("TextBox", {
-    Position = UDim2.new(1, -90, 0, 112), Size = UDim2.fromOffset(90, 26),
+    Position = UDim2.new(1, -90, 0, 150), Size = UDim2.fromOffset(90, 26),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "0", ClearTextOnFocus = false,
 }, npcPage)
 
 local npcButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 146), Size = UDim2.new(1, 0, 0, 36),
+    Position = UDim2.fromOffset(0, 184), Size = UDim2.new(1, 0, 0, 36),
     BackgroundColor3 = colors.blue, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 15, Text = "NPC AUTO: OFF — กดเพื่อเริ่ม",
 }, npcPage)
 local npcStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 190), Size = UDim2.new(1, 0, 0, 180),
+    Position = UDim2.fromOffset(0, 228), Size = UDim2.new(1, 0, 0, 140),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
@@ -5313,6 +5320,43 @@ local function findNpcPrompt(model)
 end
 
 local npc = {running = false, token = 0, rounds = 0}
+
+-- ESP: โชว์ป้ายบอกตำแหน่ง NPC ทุกตัวที่ชื่อตรงกับลิสต์ (เห็นได้ทั้งแมพ/ทะลุกำแพง เหมือนป้ายของหน้า Villain/Devil Boat)
+-- ช่วยเช็คด้วยว่า NPC โหลดเข้ามาในเกมฝั่งเราหรือยัง ถ้าประกาศเกิดแล้วแต่ป้ายไม่ขึ้นเลย แปลว่ายังไม่โหลดมาจริงๆ
+local npcMarkers = {}
+local function updateNpcMarkers(root, names)
+    local wanted = {}
+    for _, n in ipairs(names) do wanted[normalizeDuck(n)] = true end
+    local visible = {}
+    for humanoid in pairs(tracked) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
+            if wanted[normalizeDuck(model.Name)] or wanted[normalizeDuck(humanoid.DisplayName)] then
+                local part = getPart(model)
+                if part then
+                    visible[model] = true
+                    if not npcMarkers[model] then npcMarkers[model] = makeMarker(part) end
+                    local marker = npcMarkers[model]
+                    marker.gui.Adornee = part
+                    local distance = root and math.floor((root.Position - part.Position).Magnitude)
+                    marker.label.Text = "NPC: " .. model.Name .. (distance and (" • " .. distance .. " studs") or "")
+                    marker.label.TextColor3 = Color3.fromRGB(255, 210, 60)
+                end
+            end
+        end
+    end
+    for model, marker in pairs(npcMarkers) do
+        if not visible[model] then
+            marker.gui:Destroy()
+            npcMarkers[model] = nil
+        end
+    end
+end
+local function clearNpcMarkers()
+    for _, marker in pairs(npcMarkers) do marker.gui:Destroy() end
+    table.clear(npcMarkers)
+end
 
 local function stopNpc(message)
     npc.token += 1
@@ -5371,6 +5415,7 @@ local function startNpc()
                                 nextRefresh = now + 0.5
                                 refreshTracked()
                             end
+                            updateNpcMarkers(root, names)
                             local maxRounds = math.max(0, math.floor(tonumber(npcMax.Text) or 0))
                             if maxRounds > 0 and npc.rounds >= maxRounds then
                                 npcStatus.Text = "ครบ " .. npc.rounds .. " ครั้งตามที่ตั้งไว้ ปิด AUTO แล้ว"
@@ -5421,6 +5466,7 @@ local function startNpc()
             end
         end)
         raid.npcRunning = false
+        clearNpcMarkers()
         if not ok then
             npcStatus.Text = "เกิด Error หยุดระบบ ดู Console"
             warn("NPC พิเศษ:", err)
