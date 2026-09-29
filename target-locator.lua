@@ -1,4 +1,4 @@
--- Autokey v2.49 (Fixed a deadlock bug: Mini Boss left raid.fighting stuck true after a target died/went stale, which permanently blocked NPC พิเศษ/AUTO เป้าหมาย from ever acting again. Also added ESP name+distance markers for NPC พิเศษ, visible map-wide/through walls like the Villain/Devil Boat markers): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.50 (Found the real reason NPC พิเศษ never found talk-NPCs: it scanned the Humanoid-based `tracked` table like Mini Boss, but these talk NPCs (Vegeta/Bardock/Goten/Gohan/Trunks) may have no Humanoid at all. Now scans workspace by Model name directly, with its own warp routine that doesn't require a Humanoid; ESP markers use the same fixed scan): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.49",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.50",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.49" or "Anti-AFK: OFF  •  v2.49")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.50" or "Anti-AFK: OFF  •  v2.50")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -5244,7 +5244,7 @@ local npcNames = create("TextBox", {
     Position = UDim2.fromOffset(0, 112), Size = UDim2.new(1, 0, 0, 32),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
-    Text = "Vegeta, Bardock, Goten, Gohan", ClearTextOnFocus = false,
+    Text = "Vegeta, Bardock, Goten, Gohan, Trunks", ClearTextOnFocus = false,
     PlaceholderText = "ชื่อ NPC คั่นด้วย , เช่น Vegeta, Bardock, Goten, Gohan",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, npcPage)
@@ -5288,24 +5288,29 @@ local function parseNpcNames(text)
     return names
 end
 
--- หา NPC ที่ชื่อ "ตรงเป๊ะ" กับชื่อใดชื่อหนึ่งในลิสต์ (เหมือน findMiniBoss ของหน้า Mini Boss)
-local function findNpc(root, names)
+-- สแกน workspace ทั้งอันหาโมเดลที่ "ชื่อ Model" ตรงกับลิสต์ ไม่ง้อ Humanoid/tracked เลย
+-- (NPC คุยได้พวกนี้บางตัวไม่มี Humanoid เหมือนมอนที่ตี ถ้าอิง tracked เหมือน Mini Boss จะไม่มีทางเจอเลย
+-- เป็นสาเหตุที่ตัวเก่าหาไม่เจอและป้าย ESP ก็ไม่ขึ้นด้วย เพราะสแกนจาก tracked เหมือนกัน)
+local function scanNpcModels(names)
     local wanted = {}
     for _, n in ipairs(names) do wanted[normalizeDuck(n)] = true end
+    local found = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and wanted[normalizeDuck(obj.Name)] and not isPlayer(obj) then
+            local part = getPart(obj)
+            if part then table.insert(found, {model = obj, part = part}) end
+        end
+    end
+    return found
+end
+
+-- เลือกตัวที่ใกล้ตัวละครที่สุดจากผลสแกน
+local function nearestNpc(root, found)
     local best, bestDist
-    for humanoid in pairs(tracked) do
-        local model = humanoid.Parent
-        if model and model:IsA("Model") and humanoid.Health > 0
-            and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
-            if wanted[normalizeDuck(model.Name)] or wanted[normalizeDuck(humanoid.DisplayName)] then
-                local part = getPart(model)
-                if part then
-                    local d = (root.Position - part.Position).Magnitude
-                    if not bestDist or d < bestDist then
-                        best, bestDist = {model = model, humanoid = humanoid, part = part, distance = d}, d
-                    end
-                end
-            end
+    for _, entry in ipairs(found) do
+        local d = root and (root.Position - entry.part.Position).Magnitude or 0
+        if not bestDist or d < bestDist then
+            best, bestDist = entry, d
         end
     end
     return best
@@ -5319,32 +5324,47 @@ local function findNpcPrompt(model)
     return nil
 end
 
+-- วาร์ปไปยืนหน้า NPC (ทำเองแยกจาก warp() ตัวกลาง เพราะ warp() บังคับต้องมี Humanoid/มีชีวิต
+-- แต่ NPC คุยได้พวกนี้บางตัวไม่มี Humanoid เลย); ตำแหน่งคำนวณแบบเดียวกับ warp() (ยืนหน้าห่าง 6 studs)
+local function warpToNpc(target)
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root or not humanoid or humanoid.Health <= 0 then
+        return false, "รอตัวละครเกิดก่อนครับ"
+    end
+    if humanoid.SeatPart then return false, "ลงจากที่นั่งก่อนครับ" end
+    if not target.model:IsDescendantOf(workspace) then return false, "เป้าหมายหายไปแล้ว" end
+    local part = getPart(target.model)
+    if not part then return false, "รอตำแหน่งเป้าหมายโหลด" end
+
+    local destination = (part.CFrame * CFrame.new(0, 2, 6)).Position
+    local facing = Vector3.new(part.Position.X, destination.Y, part.Position.Z)
+    local targetRoot = CFrame.lookAt(destination, facing)
+    local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
+    character:PivotTo(targetRoot * rootToPivot)
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    if flight and flight.root == root then flight.cf = root.CFrame end
+    return true, "วาร์ปแล้ว"
+end
+
 local npc = {running = false, token = 0, rounds = 0}
 
 -- ESP: โชว์ป้ายบอกตำแหน่ง NPC ทุกตัวที่ชื่อตรงกับลิสต์ (เห็นได้ทั้งแมพ/ทะลุกำแพง เหมือนป้ายของหน้า Villain/Devil Boat)
 -- ช่วยเช็คด้วยว่า NPC โหลดเข้ามาในเกมฝั่งเราหรือยัง ถ้าประกาศเกิดแล้วแต่ป้ายไม่ขึ้นเลย แปลว่ายังไม่โหลดมาจริงๆ
 local npcMarkers = {}
-local function updateNpcMarkers(root, names)
-    local wanted = {}
-    for _, n in ipairs(names) do wanted[normalizeDuck(n)] = true end
+local function updateNpcMarkers(root, found)
     local visible = {}
-    for humanoid in pairs(tracked) do
-        local model = humanoid.Parent
-        if model and model:IsA("Model") and humanoid.Health > 0
-            and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
-            if wanted[normalizeDuck(model.Name)] or wanted[normalizeDuck(humanoid.DisplayName)] then
-                local part = getPart(model)
-                if part then
-                    visible[model] = true
-                    if not npcMarkers[model] then npcMarkers[model] = makeMarker(part) end
-                    local marker = npcMarkers[model]
-                    marker.gui.Adornee = part
-                    local distance = root and math.floor((root.Position - part.Position).Magnitude)
-                    marker.label.Text = "NPC: " .. model.Name .. (distance and (" • " .. distance .. " studs") or "")
-                    marker.label.TextColor3 = Color3.fromRGB(255, 210, 60)
-                end
-            end
-        end
+    for _, entry in ipairs(found) do
+        local model, part = entry.model, entry.part
+        visible[model] = true
+        if not npcMarkers[model] then npcMarkers[model] = makeMarker(part) end
+        local marker = npcMarkers[model]
+        marker.gui.Adornee = part
+        local distance = root and math.floor((root.Position - part.Position).Magnitude)
+        marker.label.Text = "NPC: " .. model.Name .. (distance and (" • " .. distance .. " studs") or "")
+        marker.label.TextColor3 = Color3.fromRGB(255, 210, 60)
     end
     for model, marker in pairs(npcMarkers) do
         if not visible[model] then
@@ -5390,8 +5410,7 @@ local function startNpc()
     task.spawn(function()
         local ok, err = pcall(function()
             local function alive() return running and npc.running and npc.token == token end
-            local nextRefresh = 0
-            local lastHumanoid, lastAt = nil, 0
+            local lastModel, lastAt = nil, 0
             while alive() do
                 if duck.enabled or raid.running or dungeon.running then
                     npcStatus.Text = "รอ: ปิด Duck/Raid/Dungeon อื่นก่อนครับ (เปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ)"
@@ -5411,11 +5430,8 @@ local function startNpc()
                             task.wait(1)
                         else
                             local now = os.clock()
-                            if now >= nextRefresh then
-                                nextRefresh = now + 0.5
-                                refreshTracked()
-                            end
-                            updateNpcMarkers(root, names)
+                            local found = scanNpcModels(names)
+                            updateNpcMarkers(root, found)
                             local maxRounds = math.max(0, math.floor(tonumber(npcMax.Text) or 0))
                             if maxRounds > 0 and npc.rounds >= maxRounds then
                                 npcStatus.Text = "ครบ " .. npc.rounds .. " ครั้งตามที่ตั้งไว้ ปิด AUTO แล้ว"
@@ -5426,17 +5442,17 @@ local function startNpc()
                                 npcStatus.Text = "รอ: มีระบบอื่น (เช่น Mini Boss) กำลังตีอยู่ก่อน..."
                                 task.wait(0.15)
                             else
-                                local target = findNpc(root, names)
+                                local target = nearestNpc(root, found)
                                 if not target then
                                     npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. " ... (คุยไปแล้ว " .. npc.rounds .. " ครั้ง)"
                                     task.wait(0.1)
-                                elseif target.humanoid == lastHumanoid and now - lastAt < 30 then
+                                elseif target.model == lastModel and now - lastAt < 30 then
                                     -- คุยตัวนี้ไปแล้วเมื่อกี้ กันกดค้าง E ซ้ำตัวเดิมรัวๆ
                                     npcStatus.Text = "คุยกับ " .. target.model.Name .. " ไปแล้ว รอตัวถัดไป..."
                                     task.wait(0.3)
                                 else
                                     npcStatus.Text = "เจอ " .. target.model.Name .. "! กำลังวาร์ปไปคุย..."
-                                    local warped, warpMsg = warp(target)
+                                    local warped, warpMsg = warpToNpc(target)
                                     if not warped then
                                         npcStatus.Text = "วาร์ปไม่สำเร็จ: " .. tostring(warpMsg)
                                         task.wait(0.3)
@@ -5452,7 +5468,7 @@ local function startNpc()
                                             task.wait(math.max(0, prompt.HoldDuration) + 0.3)
                                             pcall(function() prompt:InputHoldEnd() end)
                                             npc.rounds += 1
-                                            lastHumanoid, lastAt = target.humanoid, now
+                                            lastModel, lastAt = target.model, now
                                             npcStatus.Text = "คุยกับ " .. target.model.Name .. " สำเร็จ (" .. npc.rounds .. " ครั้ง)"
                                                 .. " • ถ้ามีเมนูขึ้นมาต่อ (เช่นเลือกทำพลังใหม่) กดเลือกเองต่อได้เลยครับ • กำลังเฝ้ารอตัวถัดไป..."
                                             task.wait(1)
