@@ -1,4 +1,4 @@
--- Autokey v2.47 (New "NPC พิเศษ" tab: watches for fast-spawning/fast-despawning named NPCs like Vegeta/Bardock/Goten/Gohan and auto-warps+fights the instant one appears; shares raid.fighting with Mini Boss so both can run together, and Mini Boss now yields to it too): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.48 (NPC พิเศษ is talk-based, not combat: warps next to the NPC using the same warp() as Villain/Devil Boat targeting, then holds its own ProximityPrompt E for you; no more fighting/buff-weapon logic, still yields to Mini Boss via raid.fighting): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.47",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.48",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.47" or "Anti-AFK: OFF  •  v2.47")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.48" or "Anti-AFK: OFF  •  v2.48")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -5205,9 +5205,8 @@ end)
 mbTab.Activated:Connect(function() showPage("miniboss") end)
 end)()
 
--- ===== NPC พิเศษ: เฝ้า NPC สุ่มเกิด (Vegeta/Bardock/Goten/Gohan ฯลฯ) ที่โผล่มาแป๊บเดียวแล้วหาย พอเกิดวาปไปตีทันที =====
--- โครงสร้างเดียวกับ Mini Boss ทุกอย่าง (ยืมอาวุธ/บัฟจากหน้า Raid, ใช้ raid.fighting/hoverPart ร่วมกัน)
--- ต่างกันแค่: กวาดหาถี่กว่ามาก (ของหายไวมาก) และแย่ง/สลับกับ Mini Boss กันเองได้ด้วย raid.fighting เหมือนที่แย่งกับ AUTO เป้าหมาย
+-- ===== NPC พิเศษ: เฝ้า NPC สุ่มเกิด (Vegeta/Bardock/Goten/Gohan ฯลฯ) ที่โผล่มาแป๊บเดียวแล้วหาย พอเกิดวาปไปกด E คุยด้วยทันที =====
+-- เป็น NPC คุยได้ (ไม่ใช่ตี): วาร์ปไปยืนใกล้ๆ (ใช้ warp() ตัวเดียวกับหน้า Villain/Devil Boat) แล้วกดค้าง E ที่ ProximityPrompt ของ NPC ตัวนั้นให้
 ;(function()
 local npcPage = makePage()
 npcPage.Visible = false
@@ -5231,7 +5230,7 @@ create("TextLabel", {
     Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 44),
     BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "สำหรับ NPC สุ่มเกิดที่โผล่มาแป๊บเดียวแล้วหาย (กวาดหาถี่กว่า Mini Boss มาก) พอเจอชื่อในลิสต์จะวาร์ปไปตีให้ทันที\nเปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ (ผลัดกันตีถ้าเกิดพร้อมกัน)",
+    Text = "สำหรับ NPC คุยได้ที่สุ่มเกิดแล้วหายไว (กวาดหาถี่มาก) พอเจอชื่อในลิสต์จะวาร์ปไปยืนใกล้ๆ แล้วกดค้าง E คุยให้อัตโนมัติ (ไม่ตี)\nเปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ",
 }, npcPage)
 
 local npcNames = create("TextBox", {
@@ -5247,42 +5246,29 @@ create("UIPadding", {PaddingLeft = UDim.new(0, 8)}, npcNames)
 create("TextLabel", {
     Position = UDim2.fromOffset(0, 112), Size = UDim2.fromOffset(280, 26),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
-    TextSize = 13, Text = "ความสูงเหนือหัว (studs)",
-    TextXAlignment = Enum.TextXAlignment.Left,
-}, npcPage)
-local npcHeight = create("TextBox", {
-    Position = UDim2.new(1, -90, 0, 112), Size = UDim2.fromOffset(90, 26),
-    BackgroundColor3 = colors.active, BorderSizePixel = 0,
-    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
-    Text = "20", ClearTextOnFocus = false,
-}, npcPage)
-
-create("TextLabel", {
-    Position = UDim2.fromOffset(0, 144), Size = UDim2.fromOffset(280, 26),
-    BackgroundTransparency = 1, TextColor3 = colors.muted,
-    TextSize = 13, Text = "จำนวนตัวสูงสุด (0 = ไม่จำกัด)",
+    TextSize = 13, Text = "จำนวนครั้งสูงสุด (0 = ไม่จำกัด)",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, npcPage)
 local npcMax = create("TextBox", {
-    Position = UDim2.new(1, -90, 0, 144), Size = UDim2.fromOffset(90, 26),
+    Position = UDim2.new(1, -90, 0, 112), Size = UDim2.fromOffset(90, 26),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "0", ClearTextOnFocus = false,
 }, npcPage)
 
 local npcButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 178), Size = UDim2.new(1, 0, 0, 36),
+    Position = UDim2.fromOffset(0, 146), Size = UDim2.new(1, 0, 0, 36),
     BackgroundColor3 = colors.blue, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 15, Text = "NPC AUTO: OFF — กดเพื่อเริ่ม",
 }, npcPage)
 local npcStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 222), Size = UDim2.new(1, 0, 0, 148),
+    Position = UDim2.fromOffset(0, 190), Size = UDim2.new(1, 0, 0, 180),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ใส่ชื่อ NPC (คั่นด้วย ,) แล้วกด AUTO ครับ ไม่ต้องเปิดหน้าเกมค้างไว้ก็ได้\nระบบจะยืม อาวุธที่ถือ/บัฟ J/อาวุธเสริมบัฟ จากหน้า Raid มาใช้ด้วยถ้าเปิดไว้",
+    Text = "ใส่ชื่อ NPC (คั่นด้วย ,) แล้วกด AUTO ครับ ไม่ต้องเปิดหน้าเกมค้างไว้ก็ได้\nพอวาร์ปไปถึงจะกดค้าง E ให้เอง ถ้าขึ้นเมนู/หน้าต่างต่อจากนั้น (เช่นเลือกทำพลังใหม่) ต้องกดเองต่อครับ ระบบพาไปแค่ถึงหน้าคุย",
 }, npcPage)
 
 -- แปลง "Vegeta, Bardock" เป็นลิสต์ชื่อ
@@ -5318,15 +5304,20 @@ local function findNpc(root, names)
     return best
 end
 
+-- หา ProximityPrompt ของ NPC ตัวนั้น (ไม่เดาข้อความปุ่ม เพราะแต่ละตัวอาจตั้งข้อความไม่เหมือนกัน)
+local function findNpcPrompt(model)
+    for _, obj in ipairs(model:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then return obj end
+    end
+    return nil
+end
+
 local npc = {running = false, token = 0, rounds = 0}
 
 local function stopNpc(message)
     npc.token += 1
     npc.running = false
-    raid.fighting = false
-    raid.hoverPart = nil
     raid.npcRunning = false
-    releaseSkillKeys()
     npcButton.Text = "NPC AUTO: OFF — กดเพื่อเริ่ม"
     npcButton.BackgroundColor3 = colors.blue
     if message then npcStatus.Text = message end
@@ -5355,12 +5346,10 @@ local function startNpc()
     task.spawn(function()
         local ok, err = pcall(function()
             local function alive() return running and npc.running and npc.token == token end
-            local nextRefresh, nextEquip = 0, 0
-            local track = {humanoid = nil, hp = 0, since = 0}
-            local readySince, sticky = nil, nil
+            local nextRefresh = 0
+            local lastHumanoid, lastAt = nil, 0
             while alive() do
                 if duck.enabled or raid.running or dungeon.running then
-                    raid.fighting = false
                     npcStatus.Text = "รอ: ปิด Duck/Raid/Dungeon อื่นก่อนครับ (เปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ)"
                     task.wait(1)
                 elseif not player.Character then
@@ -5382,96 +5371,56 @@ local function startNpc()
                                 nextRefresh = now + 0.5
                                 refreshTracked()
                             end
-                            if sticky and not (sticky.humanoid.Health > 0
-                                and sticky.humanoid:IsDescendantOf(workspace)) then
-                                if sticky.humanoid.Health <= 0 then
-                                    npc.rounds += 1
-                                    npcStatus.Text = "จัดการ " .. sticky.model.Name .. " สำเร็จ (" .. npc.rounds .. " ตัว) • กำลังเฝ้ารอตัวถัดไป..."
-                                end
-                                sticky = nil
-                            end
                             local maxRounds = math.max(0, math.floor(tonumber(npcMax.Text) or 0))
                             if maxRounds > 0 and npc.rounds >= maxRounds then
-                                npcStatus.Text = "ครบ " .. npc.rounds .. " ตัวตามที่ตั้งไว้ ปิด AUTO แล้ว"
+                                npcStatus.Text = "ครบ " .. npc.rounds .. " ครั้งตามที่ตั้งไว้ ปิด AUTO แล้ว"
                                 return
                             end
-                            if not sticky and raid.fighting then
+                            -- ให้ Mini Boss/ระบบอื่นที่กำลังตีอยู่ (raid.fighting) ตีให้เสร็จก่อน กันแย่งควบคุมตัวละคร
+                            if raid.fighting then
                                 npcStatus.Text = "รอ: มีระบบอื่น (เช่น Mini Boss) กำลังตีอยู่ก่อน..."
                                 task.wait(0.15)
                             else
-                            local target = sticky or findNpc(root, names)
-                            if not target then
-                                raid.fighting = false
-                                raid.hoverPart = nil
-                                readySince = nil
-                                npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. " ... (สำเร็จแล้ว " .. npc.rounds .. " ตัว)"
-                                task.wait(0.1)
-                            else
-                                sticky = target
-                                if now >= nextEquip then
-                                    nextEquip = now + 1
-                                    equipRaidWeapon(character)
-                                end
-                                if track.humanoid ~= target.humanoid then
-                                    track = {humanoid = target.humanoid, hp = target.humanoid.Health, since = now}
-                                    readySince = nil
-                                    raid.combatReady = false
-                                    releaseSkillKeys()
-                                    npcStatus.Text = "เจอ " .. target.model.Name .. "! กำลังวาร์ปไปตี..."
-                                    -- บัฟก่อนตี (เหมือนหน้า Raid/Mini Boss): อาวุธเสริมบัฟก่อน แล้วอาวุธหลัก + บัฟ J
-                                    if raid.buffWeapon and normalizeDuck(raid.buffWeaponName.Text) ~= "" then
-                                        equipRaidWeapon(character, raid.buffWeaponName.Text)
-                                        task.wait(0.5)
-                                        local buffWeaponKey = raid.buffWeaponKeyBox.Text ~= "" and raid.buffWeaponKeyBox.Text or "F"
-                                        tapKey(buffWeaponKey)
-                                        task.wait(0.4)
-                                        equipRaidWeapon(character)
-                                        task.wait(0.3)
-                                    end
-                                    if raid.buff then
-                                        equipRaidWeapon(character)
-                                        task.wait(0.4)
-                                        tapKey(RAID_BUFF_KEY)
-                                        task.wait(0.3)
-                                    end
-                                end
-                                local health = target.humanoid.Health
-                                if health < track.hp - 0.5 then
-                                    track.hp = health; track.since = now
-                                elseif health > track.hp then
-                                    track.hp = health
-                                end
-                                if now - track.since > 20 then
-                                    warn("NPC พิเศษ: ข้ามเป้าหมายที่ไม่ลดเลือด " .. target.model.Name)
-                                    npcStatus.Text = "ข้าม " .. target.model.Name .. " (เลือดไม่ลดนาน 20 วิ)"
-                                    sticky = nil
+                                local target = findNpc(root, names)
+                                if not target then
+                                    npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. " ... (คุยไปแล้ว " .. npc.rounds .. " ครั้ง)"
+                                    task.wait(0.1)
+                                elseif target.humanoid == lastHumanoid and now - lastAt < 30 then
+                                    -- คุยตัวนี้ไปแล้วเมื่อกี้ กันกดค้าง E ซ้ำตัวเดิมรัวๆ
+                                    npcStatus.Text = "คุยกับ " .. target.model.Name .. " ไปแล้ว รอตัวถัดไป..."
                                     task.wait(0.3)
                                 else
-                                    raid.fighting = true
-                                    raid.hoverPart = target.part
-                                    raid.hoverOffset = math.clamp(tonumber(npcHeight.Text) or 20, 3, 300)
-                                    readySince = readySince or now
-                                    if now - readySince >= 0.6 then raid.combatReady = true end
-                                    if raid.combatReady then
-                                        npcStatus.Text = string.format("กำลังตี %s\nHP %.0f/%.0f • สำเร็จแล้ว %d ตัว",
-                                            target.model.Name, health, target.humanoid.MaxHealth, npc.rounds)
-                                        useDuckSkill(character, root, target)
+                                    npcStatus.Text = "เจอ " .. target.model.Name .. "! กำลังวาร์ปไปคุย..."
+                                    local warped, warpMsg = warp(target)
+                                    if not warped then
+                                        npcStatus.Text = "วาร์ปไม่สำเร็จ: " .. tostring(warpMsg)
+                                        task.wait(0.3)
                                     else
-                                        npcStatus.Text = "เข้าตำแหน่งเหนือหัว: " .. target.model.Name
+                                        task.wait(0.15)
+                                        local prompt = findNpcPrompt(target.model)
+                                        if not prompt then
+                                            npcStatus.Text = "วาร์ปถึง " .. target.model.Name .. " แล้วแต่หาปุ่ม E ไม่เจอ (อาจหายไปแล้ว)"
+                                            task.wait(0.3)
+                                        else
+                                            npcStatus.Text = "กดค้าง E คุยกับ " .. target.model.Name .. "..."
+                                            pcall(function() prompt:InputHoldBegin() end)
+                                            task.wait(math.max(0, prompt.HoldDuration) + 0.3)
+                                            pcall(function() prompt:InputHoldEnd() end)
+                                            npc.rounds += 1
+                                            lastHumanoid, lastAt = target.humanoid, now
+                                            npcStatus.Text = "คุยกับ " .. target.model.Name .. " สำเร็จ (" .. npc.rounds .. " ครั้ง)"
+                                                .. " • ถ้ามีเมนูขึ้นมาต่อ (เช่นเลือกทำพลังใหม่) กดเลือกเองต่อได้เลยครับ • กำลังเฝ้ารอตัวถัดไป..."
+                                            task.wait(1)
+                                        end
                                     end
-                                    task.wait(0.15)
                                 end
-                            end
                             end
                         end
                     end
                 end
             end
         end)
-        raid.fighting = false
-        raid.hoverPart = nil
         raid.npcRunning = false
-        releaseSkillKeys()
         if not ok then
             npcStatus.Text = "เกิด Error หยุดระบบ ดู Console"
             warn("NPC พิเศษ:", err)
@@ -5488,9 +5437,6 @@ npcButton.Activated:Connect(function()
     else
         startNpc()
     end
-end)
-npcHeight.FocusLost:Connect(function()
-    npcHeight.Text = tostring(math.clamp(tonumber(npcHeight.Text) or 20, 3, 300))
 end)
 npcMax.FocusLost:Connect(function()
     npcMax.Text = tostring(math.max(0, math.floor(tonumber(npcMax.Text) or 0)))
