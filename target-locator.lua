@@ -1,4 +1,4 @@
--- Autokey v2.54 (NPC พิเศษ: fix false positives (warped to Kame House island): ignore huge map models, sign/prompt-text hits need exact name, must own an E prompt; ESP shows hit reason)
+-- Autokey v2.56 (NPC พิเศษ: collected count is now live (talked NPCs still in map) and survives AUTO stop/start; new buttons: mark nearby NPCs as talked, reset count)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.54",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.56",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.54" or "Anti-AFK: OFF  •  v2.54")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.56" or "Anti-AFK: OFF  •  v2.56")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -5323,10 +5323,22 @@ local npcButton = create("TextButton", {
     TextSize = 15, Text = "NPC AUTO: OFF — กดเพื่อเริ่ม",
 }, npcPage)
 local npcDump = create("TextButton", {
-    Position = UDim2.fromOffset(0, 204), Size = UDim2.new(1, 0, 0, 28),
+    Position = UDim2.fromOffset(0, 204), Size = UDim2.new(0.3, -4, 0, 28),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham,
-    TextSize = 13, Text = "สแกนข้อมูล NPC + คัดลอก",
+    TextSize = 12, Text = "สแกน+คัดลอก",
+}, npcPage)
+local npcMarkNear = create("TextButton", {
+    Position = UDim2.new(0.3, 0, 0, 204), Size = UDim2.new(0.42, -4, 0, 28),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham,
+    TextSize = 12, Text = "ตัวใกล้ตัว = คุยแล้ว",
+}, npcPage)
+local npcReset = create("TextButton", {
+    Position = UDim2.new(0.72, 0, 0, 204), Size = UDim2.new(0.28, 0, 0, 28),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham,
+    TextSize = 12, Text = "รีเซ็ตการนับ",
 }, npcPage)
 local npcStatus = create("TextLabel", {
     Position = UDim2.fromOffset(0, 238), Size = UDim2.new(1, 0, 0, 130),
@@ -5538,7 +5550,9 @@ local function scanNpc()
         if entry.part then
             -- NPC คุยได้ต้องมีปุ่ม E: ไม่มีของตัวเองก็ดูปุ่มที่อยู่ติดตัว (ใน 10 studs) ถ้าไม่มีเลยไม่ใช่ NPC คุย ข้ามไป
             entry.prompt = entry.prompt or findNpcPrompt(entry.model) or nearbyPrompt(entry.part.Position, 10)
-            if entry.prompt then table.insert(kept, entry) end
+            -- ไม่กรองตัวที่ไม่มีปุ่ม E ทิ้งอีกแล้ว (ตัวที่คุยแล้วปุ่มอาจหาย ทำให้ป้ายหายไปเฉยๆ) แต่ติดธงไว้ ไม่วาร์ปไปหา
+            entry.noPrompt = entry.prompt == nil
+            table.insert(kept, entry)
         end
     end
     return kept
@@ -5611,8 +5625,18 @@ local function updateNpcMarkers(root, found)
         local marker = npcMarkers[model]
         marker.gui.Adornee = part
         local distance = root and math.floor((root.Position - part.Position).Magnitude)
-        marker.label.Text = "NPC: " .. model.Name .. (entry.guessed and " (เดา)" or (entry.how and (" [" .. entry.how .. "]") or "")) .. (distance and (" • " .. distance .. " studs") or "")
-        marker.label.TextColor3 = Color3.fromRGB(255, 210, 60)
+        local state, color = "", Color3.fromRGB(255, 210, 60)
+        if entry.guessed then
+            state = " (เดา)"
+        elseif npc.talked[model] then
+            state, color = " (รวมแล้ว)", Color3.fromRGB(90, 235, 120)
+        elseif entry.noPrompt then
+            state, color = " (ไม่มีปุ่ม E)", Color3.fromRGB(170, 170, 170)
+        elseif entry.how then
+            state = " [" .. entry.how .. "]"
+        end
+        marker.label.Text = "NPC: " .. model.Name .. state .. (distance and (" • " .. distance .. " studs") or "")
+        marker.label.TextColor3 = color
     end
     for model, marker in pairs(npcMarkers) do
         if not visible[model] then
@@ -5680,6 +5704,28 @@ do
     end)
 end
 
+-- ชื่อที่ใช้นับ: ชื่อในลิสต์ที่โมเดลตัวนี้ตรง (กัน Trunk กับ TrunkNPC นับเป็นสองตัว)
+local function npcKeyOf(model)
+    local modelKey = normalizeDuck(model.Name)
+    for _, w in ipairs(wantedList()) do
+        if modelKey:find(w, 1, true) then return w end
+    end
+    return modelKey
+end
+
+-- นับสด: จำนวนชื่อที่คุยไปแล้วและตัวนั้นยังอยู่ในแมพ (ตัวที่หายไป/เกมรีเซ็ตแล้วไม่นับ); ค่าคงอยู่ข้ามการกดหยุด/เริ่ม
+local function countCollected()
+    local keys, n = {}, 0
+    for model, key in pairs(npc.talked) do
+        if model.Parent and model:IsDescendantOf(workspace) then
+            if not keys[key] then keys[key] = true; n += 1 end
+        else
+            npc.talked[model] = nil
+        end
+    end
+    return n
+end
+
 local function stopNpc(message)
     npc.token += 1
     npc.running = false
@@ -5704,7 +5750,7 @@ local function startNpc()
     local token = npc.token
     npc.running = true
     npc.rounds = 0
-    npc.talked, npc.collected, npc.collectedCount = {}, {}, 0
+    npc.collectedCount = countCollected()
     raid.npcRunning = true
     npc.hooksOn()
     npcButton.Text = "NPC AUTO: ON — กดเพื่อหยุด"
@@ -5737,18 +5783,30 @@ local function startNpc()
                             local now = os.clock()
                             if now - foundAt >= 0.25 then
                                 found, foundAt = scanNpc(), now
+                                npc.collectedCount = countCollected()
+                            end
+                            if npc.collectedCount >= #wantedList() then
+                                npcStatus.Text = "รวมครบ " .. npc.collectedCount .. "/" .. #wantedList() .. " ตัวแล้ว! ปิด AUTO ให้ ไปทำพลังใหม่ได้เลยครับ (ถ้ายังไม่ครบจริงในเกม กด \"รีเซ็ตการนับ\")"
+                                return
                             end
                             -- มีประกาศเกิดแต่หาชื่อไม่เจอ → เดาจากปุ่ม E ที่เพิ่งโผล่
                             -- ตัวที่คุยแล้วจะวิ่งมาอยู่กับเรา ข้ามไปเลย (คุยซ้ำอาจยกเลิกการตาม) เหลือแต่ตัวใหม่ที่ยังไม่ได้คุย
-                            local scanList = {}
+                            local scanList, display = {}, {}
                             for _, e in ipairs(found) do
-                                if not npc.talked[e.model] then table.insert(scanList, e) end
+                                table.insert(display, e)
+                                if not npc.talked[e.model] and e.prompt and e.prompt.Enabled then
+                                    table.insert(scanList, e)
+                                end
                             end
                             if #scanList == 0 then
                                 local guess = guessFromRecentPrompt()
-                                if guess and not npc.talked[guess.model] then scanList = {guess} end
+                                if guess and not npc.talked[guess.model] then
+                                    scanList = {guess}
+                                    table.insert(display, guess)
+                                end
                             end
-                            updateNpcMarkers(root, scanList)
+                            -- ป้าย ESP โชว์ครบทุกตัวที่จับได้ (รวมตัวที่คุยแล้ว/ไม่มีปุ่ม E) จะได้เห็นว่าระบบเห็นกี่ตัว
+                            updateNpcMarkers(root, display)
                             local maxRounds = math.max(0, math.floor(tonumber(npcMax.Text) or 0))
                             if maxRounds > 0 and npc.rounds >= maxRounds then
                                 npcStatus.Text = "ครบ " .. npc.rounds .. " ครั้งตามที่ตั้งไว้ ปิด AUTO แล้ว"
@@ -5765,7 +5823,7 @@ local function startNpc()
                                     if now < npc.hintUntil then
                                         hint = "\nได้ยินประกาศเกิดของ [" .. tostring(npc.hintName) .. "] แล้ว แต่ยังไม่เจอตัวในแมพฝั่งเรา — กดปุ่ม \"สแกนข้อมูล NPC + คัดลอก\" ตอนนี้แล้วส่งผลมาให้ผมได้เลยครับ"
                                     end
-                                    npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. "\nรวมแล้ว " .. npc.collectedCount .. "/" .. #names .. " ตัว (ครบแล้วค่อยไปทำพลังใหม่)" .. hint
+                                    npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. "\nรวมแล้ว " .. npc.collectedCount .. "/" .. #names .. " ตัว (ครบแล้วค่อยไปทำพลังใหม่) • เห็นในแมพตอนนี้ " .. #found .. " ตัว" .. hint
                                     task.wait(0.1)
                                 elseif target.model == lastModel and now - lastAt < 30 then
                                     -- คุยตัวนี้ไปแล้วเมื่อกี้ กันกดค้าง E ซ้ำตัวเดิมรัวๆ
@@ -5801,22 +5859,14 @@ local function startNpc()
                                             pcall(function() prompt:InputHoldEnd() end)
                                             npc.rounds += 1
                                             lastModel, lastAt = target.model, now
-                                            npc.talked[target.model] = true
-                                            local modelKey = normalizeDuck(target.model.Name)
-                                            local key = modelKey
-                                            for _, w in ipairs(wantedList()) do
-                                                if modelKey:find(w, 1, true) then key = w break end
-                                            end
-                                            if not npc.collected[key] then
-                                                npc.collected[key] = true
-                                                npc.collectedCount += 1
-                                            end
+                                            npc.talked[target.model] = npcKeyOf(target.model)
+                                            npc.collectedCount = countCollected()
                                             if npc.collectedCount >= #wantedList() then
                                                 npcStatus.Text = "รวมครบ " .. npc.collectedCount .. "/" .. #wantedList() .. " ตัวแล้ว! ปิด AUTO ให้ ไปทำพลังใหม่ได้เลยครับ"
                                                 return
                                             end
                                             npcStatus.Text = "คุยกับ " .. target.model.Name .. " สำเร็จ • รวมแล้ว " .. npc.collectedCount .. "/" .. #wantedList()
-                                                .. " ตัว • กำลังเฝ้ารอตัวถัดไป... (ถ้าตัวไหนไม่ตาม กดหยุดแล้วเริ่มใหม่เพื่อคุยซ้ำได้)"
+                                                .. " ตัว • กำลังเฝ้ารอตัวถัดไป... (ถ้าตัวไหนไม่ตาม กด \"รีเซ็ตการนับ\" เพื่อคุยซ้ำได้)"
                                             task.wait(1)
                                         end
                                     end
@@ -5870,7 +5920,7 @@ local function dumpNpcInfo()
 
     local streaming = "?"
     pcall(function() streaming = tostring(workspace.StreamingEnabled) end)
-    add("=== NPC พิเศษ DUMP (Autokey v2.54) ===")
+    add("=== NPC พิเศษ DUMP (Autokey v2.56) ===")
     add("ชื่อที่ค้นหา: " .. npcNames.Text .. " | StreamingEnabled=" .. streaming .. " | index=" .. (function()
         local n = 0
         for _ in pairs(npc.index) do n += 1 end
@@ -5992,6 +6042,28 @@ npcDump.Activated:Connect(function()
         npcStatus.Text = "สแกนไม่สำเร็จ: " .. tostring(err)
         warn("NPC dump:", err)
     end
+end)
+npcMarkNear.Activated:Connect(function()
+    if not npc.running then
+        npcStatus.Text = "เปิด NPC AUTO ก่อนครับ แล้วค่อยกดปุ่มนี้ (ใช้ตอนมี NPC ที่คุยไปแล้ว/ตามเราอยู่ก่อนกดเริ่ม จะได้ไม่วาร์ปไปคุยซ้ำ)"
+        return
+    end
+    local rootNow = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not rootNow then npcStatus.Text = "รอตัวละครพร้อมก่อนครับ" return end
+    local marked = 0
+    for _, entry in ipairs(scanNpc()) do
+        if not npc.talked[entry.model] and (rootNow.Position - entry.part.Position).Magnitude <= 30 then
+            npc.talked[entry.model] = npcKeyOf(entry.model)
+            marked += 1
+        end
+    end
+    npc.collectedCount = countCollected()
+    npcStatus.Text = "ทำเครื่องหมายว่าคุยแล้ว " .. marked .. " ตัว (ที่อยู่ใกล้ตัวใน 30 studs) • รวมแล้ว " .. npc.collectedCount .. "/" .. #wantedList()
+end)
+npcReset.Activated:Connect(function()
+    npc.talked = {}
+    npc.collectedCount = 0
+    npcStatus.Text = "รีเซ็ตการนับแล้ว (ตัวที่เห็นในแมพจะถูกวาร์ปไปคุยใหม่ถ้ายังไม่ได้คุย)"
 end)
 npcMax.FocusLost:Connect(function()
     npcMax.Text = tostring(math.max(0, math.floor(tonumber(npcMax.Text) or 0)))
