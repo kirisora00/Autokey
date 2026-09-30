@@ -1,4 +1,4 @@
--- Autokey v2.50 (Found the real reason NPC พิเศษ never found talk-NPCs: it scanned the Humanoid-based `tracked` table like Mini Boss, but these talk NPCs (Vegeta/Bardock/Goten/Gohan/Trunks) may have no Humanoid at all. Now scans workspace by Model name directly, with its own warp routine that doesn't require a Humanoid; ESP markers use the same fixed scan): sidebar, flight (position-locked), targets, continuous follow (Devil Boat), Duck Boss summon loop, and Raid opener (E -> Open -> warp into portal ring)
+-- Autokey v2.51 (NPC พิเศษ: fuzzy name match on Model/Part/Humanoid.DisplayName/billboard text/ProximityPrompt text, chat-announcement watcher with recent-prompt fallback, incremental index, diagnostic clipboard dump button)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.50",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.51",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.50" or "Anti-AFK: OFF  •  v2.50")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.51" or "Anti-AFK: OFF  •  v2.51")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -644,7 +644,8 @@ local raidStatus = create("TextLabel", {
         buffWeaponClickBusy = true
         task.defer(function() buffWeaponClickBusy = false end)
         local ok, err = pcall(function()
-            if normalizeDuck(raidBuffWeapon.Text) == "" then
+            -- (normalizeDuck ถูกประกาศทีหลังบรรทัดนี้ เรียกจากตรงนี้จะเป็น nil แล้วปุ่มไม่ทำงานเลย จึงตัดช่องว่างเองตรงนี้)
+            if (string.lower(raidBuffWeapon.Text):gsub("[%s%p]", "")) == "" then
                 raidBuffWeaponButton.Text = "อาวุธเสริมบัฟ: ใส่ชื่ออาวุธก่อนครับ"
                 return
             end
@@ -5212,8 +5213,11 @@ end)
 mbTab.Activated:Connect(function() showPage("miniboss") end)
 end)()
 
--- ===== NPC พิเศษ: เฝ้า NPC สุ่มเกิด (Vegeta/Bardock/Goten/Gohan ฯลฯ) ที่โผล่มาแป๊บเดียวแล้วหาย พอเกิดวาปไปกด E คุยด้วยทันที =====
--- เป็น NPC คุยได้ (ไม่ใช่ตี): วาร์ปไปยืนใกล้ๆ (ใช้ warp() ตัวเดียวกับหน้า Villain/Devil Boat) แล้วกดค้าง E ที่ ProximityPrompt ของ NPC ตัวนั้นให้
+-- ===== NPC พิเศษ: เฝ้า NPC สุ่มเกิด (Vegeta/Bardock/Goten/Gohan/Trunks ฯลฯ) ที่โผล่มาแป๊บเดียวแล้วหาย พอเกิดวาปไปกด E คุยด้วยทันที =====
+-- v2.51: เลิกจับชื่อ Model แบบตรงเป๊ะอย่างเดียว (v2.50 หาไม่เจอ เพราะชื่อจริงในเกมอาจไม่ตรง/ชื่ออยู่ที่ป้ายหรือ DisplayName)
+--   * จับแบบ "ชื่อมีคำนี้อยู่" จาก Model / Part / Humanoid.DisplayName / ป้ายข้อความเหนือหัว / ข้อความของปุ่ม E (ProximityPrompt)
+--   * ฟังประกาศในแชท ("[Server] [Vegeta] are Spawned") แล้วเปิดโหมดเฝ้าพิเศษ ถ้าหาตามชื่อไม่เจอจะเดาจากปุ่ม E ที่เพิ่งโผล่มา
+--   * ปุ่ม "สแกนข้อมูล+คัดลอก" ดูดข้อมูลจริงของ NPC ตอนเกิดอยู่ (ชื่อ/ตำแหน่ง/ปุ่ม E) ไว้ใช้แก้ให้ตรงเป๊ะ
 ;(function()
 local npcPage = makePage()
 npcPage.Visible = false
@@ -5234,14 +5238,14 @@ create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left,
 }, npcPage)
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 82),
+    Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 60),
     BackgroundTransparency = 1, TextColor3 = colors.muted, TextWrapped = true,
     TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "สำหรับ NPC คุยได้ที่สุ่มเกิดแล้วหายไว (กวาดหาถี่มาก) พอเจอชื่อในลิสต์จะวาร์ปไปยืนใกล้ๆ แล้วกดค้าง E คุยให้อัตโนมัติ (ไม่ตี)\nระหว่างเปิด AUTO จะขึ้นป้ายชื่อ+ระยะห่างเหนือหัว NPC ที่เจอด้วย เห็นได้ทั้งแมพ/ทะลุกำแพงเหมือนป้ายหน้า Villain/Devil Boat\nเปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ",
+    Text = "NPC คุยได้ที่สุ่มเกิดแล้วหายไว: เจอชื่อในลิสต์ (มีคำนี้อยู่ในชื่อก็นับ) จะวาร์ปไปกดค้าง E ให้อัตโนมัติ + ขึ้นป้ายระยะเห็นทั้งแมพ ไม่ตี\nถ้ายังหาไม่เจอ กดปุ่ม \"สแกนข้อมูล+คัดลอก\" ตอน NPC เกิดอยู่ แล้ววางข้อความส่งให้ผมครับ จะได้ชื่อจริงในเกม",
 }, npcPage)
 
 local npcNames = create("TextBox", {
-    Position = UDim2.fromOffset(0, 112), Size = UDim2.new(1, 0, 0, 32),
+    Position = UDim2.fromOffset(0, 90), Size = UDim2.new(1, 0, 0, 32),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "Vegeta, Bardock, Goten, Gohan, Trunks", ClearTextOnFocus = false,
@@ -5251,32 +5255,48 @@ local npcNames = create("TextBox", {
 create("UIPadding", {PaddingLeft = UDim.new(0, 8)}, npcNames)
 
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 150), Size = UDim2.fromOffset(280, 26),
+    Position = UDim2.fromOffset(0, 128), Size = UDim2.fromOffset(280, 26),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, Text = "จำนวนครั้งสูงสุด (0 = ไม่จำกัด)",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, npcPage)
 local npcMax = create("TextBox", {
-    Position = UDim2.new(1, -90, 0, 150), Size = UDim2.fromOffset(90, 26),
+    Position = UDim2.new(1, -90, 0, 128), Size = UDim2.fromOffset(90, 26),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "0", ClearTextOnFocus = false,
 }, npcPage)
 
 local npcButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 184), Size = UDim2.new(1, 0, 0, 36),
+    Position = UDim2.fromOffset(0, 162), Size = UDim2.new(1, 0, 0, 36),
     BackgroundColor3 = colors.blue, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
     TextSize = 15, Text = "NPC AUTO: OFF — กดเพื่อเริ่ม",
 }, npcPage)
+local npcDump = create("TextButton", {
+    Position = UDim2.fromOffset(0, 204), Size = UDim2.new(1, 0, 0, 28),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.Gotham,
+    TextSize = 13, Text = "สแกนข้อมูล NPC + คัดลอก",
+}, npcPage)
 local npcStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 228), Size = UDim2.new(1, 0, 0, 140),
+    Position = UDim2.fromOffset(0, 238), Size = UDim2.new(1, 0, 0, 130),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "ใส่ชื่อ NPC (คั่นด้วย ,) แล้วกด AUTO ครับ ไม่ต้องเปิดหน้าเกมค้างไว้ก็ได้\nพอวาร์ปไปถึงจะกดค้าง E ให้เอง ถ้าขึ้นเมนู/หน้าต่างต่อจากนั้น (เช่นเลือกทำพลังใหม่) ต้องกดเองต่อครับ ระบบพาไปแค่ถึงหน้าคุย",
+    Text = "ใส่ชื่อ NPC (คั่นด้วย ,) แล้วกด AUTO ครับ\nพอวาร์ปไปถึงจะกดค้าง E ให้เอง ถ้าขึ้นเมนู/หน้าต่างต่อจากนั้น (เช่นเลือกทำพลังใหม่) ต้องกดเองต่อครับ ระบบพาไปแค่ถึงหน้าคุย",
 }, npcPage)
+
+local npc = {
+    running = false, token = 0, rounds = 0,
+    index = {},          -- instance ที่น่าสนใจใน workspace (คงไว้ให้สดด้วย DescendantAdded/Removing สแกนเบา ไม่ต้อง GetDescendants ทุกรอบ)
+    recent = {},         -- Model/Humanoid ที่เพิ่งเกิดใหม่ (ไว้ดูใน dump)
+    recentPrompts = {},  -- ProximityPrompt ที่เพิ่งเกิดใหม่ (ใช้เป็นตัวเดาสำรองตอนมีประกาศ)
+    chat = {},           -- ข้อความแชท/ประกาศล่าสุด
+    hintUntil = 0, hintAt = 0, hintName = nil,
+    wantedText = nil, wantedCache = {},
+}
 
 -- แปลง "Vegeta, Bardock" เป็นลิสต์ชื่อ
 local function parseNpcNames(text)
@@ -5288,44 +5308,187 @@ local function parseNpcNames(text)
     return names
 end
 
--- สแกน workspace ทั้งอันหาโมเดลที่ "ชื่อ Model" ตรงกับลิสต์ ไม่ง้อ Humanoid/tracked เลย
--- (NPC คุยได้พวกนี้บางตัวไม่มี Humanoid เหมือนมอนที่ตี ถ้าอิง tracked เหมือน Mini Boss จะไม่มีทางเจอเลย
--- เป็นสาเหตุที่ตัวเก่าหาไม่เจอและป้าย ESP ก็ไม่ขึ้นด้วย เพราะสแกนจาก tracked เหมือนกัน)
-local function scanNpcModels(names)
-    local wanted = {}
-    for _, n in ipairs(names) do wanted[normalizeDuck(n)] = true end
-    local found = {}
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and wanted[normalizeDuck(obj.Name)] and not isPlayer(obj) then
-            local part = getPart(obj)
-            if part then table.insert(found, {model = obj, part = part}) end
+-- ลิสต์ชื่อแบบ normalize (พิมพ์เล็ก ตัดช่องว่าง/เครื่องหมาย) เก็บแคชไว้ตามข้อความในช่อง ไม่ต้องคำนวณซ้ำทุกครั้ง
+local function wantedList()
+    local text = npcNames.Text
+    if npc.wantedText ~= text then
+        npc.wantedText = text
+        local list = {}
+        for _, name in ipairs(parseNpcNames(text)) do
+            local n = normalizeDuck(name)
+            if #n >= 2 then table.insert(list, n) end
         end
+        npc.wantedCache = list
     end
-    return found
+    return npc.wantedCache
 end
 
--- เลือกตัวที่ใกล้ตัวละครที่สุดจากผลสแกน
-local function nearestNpc(root, found)
-    local best, bestDist
-    for _, entry in ipairs(found) do
-        local d = root and (root.Position - entry.part.Position).Magnitude or 0
-        if not bestDist or d < bestDist then
-            best, bestDist = entry, d
-        end
+-- เช็คว่าข้อความมีชื่อในลิสต์อยู่ไหม คืน (ชื่อที่ตรง, คะแนน) 2 = ตรงเป๊ะ 1 = มีคำนี้อยู่ในข้อความ; ข้อความยาวเกินไม่นับ (กันป้ายบรรยายยาวๆ)
+local function matchWanted(text, wanted)
+    if type(text) ~= "string" or text == "" or #text > 60 then return nil end
+    local nt = normalizeDuck(text)
+    if nt == "" or #nt > 40 then return nil end
+    for _, w in ipairs(wanted) do
+        if nt == w then return w, 2 end
     end
-    return best
+    for _, w in ipairs(wanted) do
+        if nt:find(w, 1, true) then return w, 1 end
+    end
+    return nil
 end
 
--- หา ProximityPrompt ของ NPC ตัวนั้น (ไม่เดาข้อความปุ่ม เพราะแต่ละตัวอาจตั้งข้อความไม่เหมือนกัน)
-local function findNpcPrompt(model)
-    for _, obj in ipairs(model:GetDescendants()) do
+local function pushRing(ring, item, cap)
+    table.insert(ring, item)
+    if #ring > cap then table.remove(ring, 1) end
+end
+
+local function indexAdd(obj)
+    if obj:IsA("Model") or obj:IsA("Humanoid") or obj:IsA("ProximityPrompt")
+        or obj:IsA("TextLabel") or obj:IsA("TextButton") then
+        npc.index[obj] = true
+    elseif obj:IsA("BasePart") then
+        -- Part เยอะมาก เก็บเฉพาะที่ชื่อตรงกับลิสต์ตอนนี้
+        if matchWanted(obj.Name, wantedList()) then npc.index[obj] = true end
+    end
+end
+
+-- ข้อความแชท/ประกาศ: ถ้ามีชื่อ NPC ในลิสต์ + คำว่า spawn ให้เปิดโหมดเฝ้าพิเศษ 35 วิ
+local function onChatText(text)
+    text = stripRichText(text)
+    if text == "" then return end
+    local now = os.clock()
+    for i = #npc.chat, math.max(1, #npc.chat - 4), -1 do
+        if npc.chat[i].text == text and now - npc.chat[i].at < 3 then return end
+    end
+    pushRing(npc.chat, {text = text, at = now}, 25)
+    local nt = normalizeDuck(text)
+    if nt:find("spawn", 1, true) and not nt:find("despawn", 1, true) then
+        for _, w in ipairs(wantedList()) do
+            if nt:find(w, 1, true) then
+                npc.hintUntil, npc.hintAt, npc.hintName = now + 35, now, w
+                break
+            end
+        end
+    end
+end
+
+local function ownerOf(obj)
+    if obj:IsA("Model") then return obj end
+    return obj:FindFirstAncestorWhichIsA("Model") or obj:FindFirstAncestorWhichIsA("BasePart")
+end
+
+local function partOf(inst)
+    if inst:IsA("BasePart") then return inst end
+    if inst:IsA("Model") then return getPart(inst) end
+    return nil
+end
+
+-- หา ProximityPrompt (ปุ่ม E) ของ NPC ตัวนั้น ไม่เดาข้อความปุ่มเพราะแต่ละตัวอาจตั้งไม่เหมือนกัน
+local function findNpcPrompt(inst)
+    if inst:IsA("ProximityPrompt") then return inst end
+    for _, obj in ipairs(inst:GetDescendants()) do
         if obj:IsA("ProximityPrompt") then return obj end
     end
     return nil
 end
 
--- วาร์ปไปยืนหน้า NPC (ทำเองแยกจาก warp() ตัวกลาง เพราะ warp() บังคับต้องมี Humanoid/มีชีวิต
--- แต่ NPC คุยได้พวกนี้บางตัวไม่มี Humanoid เลย); ตำแหน่งคำนวณแบบเดียวกับ warp() (ยืนหน้าห่าง 6 studs)
+-- ปุ่ม E ที่อยู่ใกล้ตำแหน่งนั้น (สำรองกรณี prompt ไม่ได้อยู่ใต้โมเดล NPC)
+local function nearbyPrompt(position, radius)
+    local best, bestDist
+    for obj in pairs(npc.index) do
+        if obj:IsA("ProximityPrompt") and obj:IsDescendantOf(workspace) then
+            local pos = duckPromptPosition(obj)
+            if pos then
+                local d = (pos - position).Magnitude
+                if d <= radius and (not bestDist or d < bestDist) then best, bestDist = obj, d end
+            end
+        end
+    end
+    return best
+end
+
+-- สแกนจาก index: จับชื่อ Model/Part, Humanoid.DisplayName, ข้อความป้าย, ข้อความปุ่ม E แล้วรวมเป็น "เจ้าของ" (โมเดล NPC) ตัวเดียว
+local function scanNpc()
+    local wanted = wantedList()
+    local owners, found = {}, {}
+    if #wanted == 0 then return found end
+    local function consider(owner, score, prompt)
+        if not owner or not owner:IsDescendantOf(workspace) or isPlayer(owner) then return end
+        local entry = owners[owner]
+        if entry then
+            if score > entry.score then entry.score = score end
+            entry.prompt = entry.prompt or prompt
+        else
+            entry = {model = owner, score = score, prompt = prompt}
+            owners[owner] = entry
+            table.insert(found, entry)
+        end
+    end
+    for obj in pairs(npc.index) do
+        if not obj.Parent or not obj:IsDescendantOf(workspace) then
+            npc.index[obj] = nil
+        elseif obj:IsA("Model") then
+            local _, score = matchWanted(obj.Name, wanted)
+            if score then consider(obj, score) end
+        elseif obj:IsA("Humanoid") then
+            local _, score = matchWanted(obj.DisplayName, wanted)
+            if not score then _, score = matchWanted(obj.Name, wanted) end
+            if score and obj.Parent and obj.Parent:IsA("Model") then consider(obj.Parent, score) end
+        elseif obj:IsA("ProximityPrompt") then
+            local _, score = matchWanted(obj.ObjectText, wanted)
+            if not score then _, score = matchWanted(obj.ActionText, wanted) end
+            if score then consider(ownerOf(obj), score, obj) end
+        elseif obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            local _, score = matchWanted(stripRichText(obj.Text), wanted)
+            if score then consider(ownerOf(obj), score) end
+        elseif obj:IsA("BasePart") then
+            local _, score = matchWanted(obj.Name, wanted)
+            if score then consider(obj:FindFirstAncestorWhichIsA("Model") or obj, score) end
+        end
+    end
+    local kept = {}
+    for _, entry in ipairs(found) do
+        entry.part = partOf(entry.model)
+        if entry.part then
+            entry.prompt = entry.prompt or findNpcPrompt(entry.model)
+            table.insert(kept, entry)
+        end
+    end
+    return kept
+end
+
+-- เดาสำรอง: มีประกาศเกิดแต่หาชื่อไม่เจอ → เอาปุ่ม E ที่เพิ่งโผล่มาหลังประกาศ (ล่าสุดก่อน)
+local function guessFromRecentPrompt()
+    if os.clock() > npc.hintUntil then return nil end
+    for i = #npc.recentPrompts, 1, -1 do
+        local item = npc.recentPrompts[i]
+        local prompt = item.inst
+        if item.at >= npc.hintAt - 3 and prompt.Parent and prompt:IsDescendantOf(workspace) and prompt.Enabled then
+            local owner = ownerOf(prompt)
+            if owner and not isPlayer(owner) then
+                local part = partOf(owner) or (prompt.Parent:IsA("BasePart") and prompt.Parent) or nil
+                if part then
+                    return {model = owner, part = part, prompt = prompt, score = 0, guessed = true}
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- เลือกตัวที่ดีที่สุด: มีปุ่ม E ก่อน → ชื่อตรงเป๊ะก่อน → ใกล้ที่สุด
+local function pickNpc(root, found)
+    local best, bestKey
+    for _, entry in ipairs(found) do
+        local d = root and (root.Position - entry.part.Position).Magnitude or 0
+        entry.distance = d
+        local key = (entry.prompt and 0 or 100000000) + (2 - entry.score) * 10000000 + d
+        if not bestKey or key < bestKey then best, bestKey = entry, key end
+    end
+    return best
+end
+
+-- วาร์ปไปยืนหน้า NPC (ทำเองแยกจาก warp() เพราะ warp() บังคับต้องมี Humanoid ที่ยังมีชีวิต; NPC คุยได้บางตัวไม่มี Humanoid)
 local function warpToNpc(target)
     local character = player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -5335,7 +5498,8 @@ local function warpToNpc(target)
     end
     if humanoid.SeatPart then return false, "ลงจากที่นั่งก่อนครับ" end
     if not target.model:IsDescendantOf(workspace) then return false, "เป้าหมายหายไปแล้ว" end
-    local part = getPart(target.model)
+    local part = target.part
+    if not part or not part:IsDescendantOf(workspace) then part = partOf(target.model) end
     if not part then return false, "รอตำแหน่งเป้าหมายโหลด" end
 
     local destination = (part.CFrame * CFrame.new(0, 2, 6)).Position
@@ -5349,10 +5513,7 @@ local function warpToNpc(target)
     return true, "วาร์ปแล้ว"
 end
 
-local npc = {running = false, token = 0, rounds = 0}
-
--- ESP: โชว์ป้ายบอกตำแหน่ง NPC ทุกตัวที่ชื่อตรงกับลิสต์ (เห็นได้ทั้งแมพ/ทะลุกำแพง เหมือนป้ายของหน้า Villain/Devil Boat)
--- ช่วยเช็คด้วยว่า NPC โหลดเข้ามาในเกมฝั่งเราหรือยัง ถ้าประกาศเกิดแล้วแต่ป้ายไม่ขึ้นเลย แปลว่ายังไม่โหลดมาจริงๆ
+-- ESP: ป้ายบอกตำแหน่ง NPC ที่เจอ (เห็นได้ทั้งแมพ/ทะลุกำแพง เหมือนป้ายหน้า Villain/Devil Boat)
 local npcMarkers = {}
 local function updateNpcMarkers(root, found)
     local visible = {}
@@ -5363,7 +5524,7 @@ local function updateNpcMarkers(root, found)
         local marker = npcMarkers[model]
         marker.gui.Adornee = part
         local distance = root and math.floor((root.Position - part.Position).Magnitude)
-        marker.label.Text = "NPC: " .. model.Name .. (distance and (" • " .. distance .. " studs") or "")
+        marker.label.Text = "NPC: " .. model.Name .. (entry.guessed and " (เดา)" or "") .. (distance and (" • " .. distance .. " studs") or "")
         marker.label.TextColor3 = Color3.fromRGB(255, 210, 60)
     end
     for model, marker in pairs(npcMarkers) do
@@ -5378,6 +5539,57 @@ local function clearNpcMarkers()
     table.clear(npcMarkers)
 end
 
+-- ===== ตัวดักข้อมูลเบื้องหลัง (ทำงานตั้งแต่เปิดสคริปต์ เพื่อให้ dump มีประวัติ/ประกาศให้ดูแม้ยังไม่กด AUTO) =====
+do
+    local addedConn, removingConn, chatConn, guiConn
+    local function shutdown()
+        for _, c in ipairs({addedConn, removingConn, chatConn, guiConn}) do
+            if c then pcall(function() c:Disconnect() end) end
+        end
+    end
+    addedConn = workspace.DescendantAdded:Connect(function(obj)
+        if not running then shutdown() return end
+        indexAdd(obj)
+        if obj:IsA("ProximityPrompt") then
+            pushRing(npc.recentPrompts, {inst = obj, at = os.clock()}, 30)
+        elseif obj:IsA("Model") or obj:IsA("Humanoid") then
+            pushRing(npc.recent, {inst = obj, at = os.clock()}, 50)
+        end
+    end)
+    removingConn = workspace.DescendantRemoving:Connect(function(obj)
+        npc.index[obj] = nil
+    end)
+    -- แชทของ Roblox (TextChatService) + แชทเก่า + ป้ายประกาศที่เกมสร้างเอง (ดูเฉพาะข้อความที่มีคำว่า spawn)
+    pcall(function()
+        chatConn = game:GetService("TextChatService").MessageReceived:Connect(function(message)
+            onChatText(message.Text)
+        end)
+    end)
+    pcall(function()
+        local events = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+        local done = events and events:FindFirstChild("OnMessageDoneFiltering")
+        if done then done.OnClientEvent:Connect(function(data) onChatText(data.Message) end) end
+    end)
+    guiConn = playerGui.DescendantAdded:Connect(function(obj)
+        if not obj:IsA("TextLabel") then return end
+        task.defer(function()
+            task.wait(0.05)
+            local ok, text = pcall(function() return obj.Text end)
+            if ok and type(text) == "string" and #text < 200 and text:lower():find("spawn", 1, true) then
+                onChatText(text)
+            end
+        end)
+    end)
+    task.spawn(function()
+        local count = 0
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            indexAdd(obj)
+            count += 1
+            if count % 4000 == 0 then task.wait() end
+        end
+    end)
+end
+
 local function stopNpc(message)
     npc.token += 1
     npc.running = false
@@ -5388,7 +5600,7 @@ local function stopNpc(message)
 end
 
 local function startNpc()
-    if normalizeDuck(npcNames.Text) == "" then
+    if #wantedList() == 0 then
         npcStatus.Text = "ใส่ชื่อ NPC ก่อนครับ (คั่นด้วย , เช่น Vegeta, Bardock)"
         return
     end
@@ -5411,6 +5623,7 @@ local function startNpc()
         local ok, err = pcall(function()
             local function alive() return running and npc.running and npc.token == token end
             local lastModel, lastAt = nil, 0
+            local found, foundAt = {}, -1
             while alive() do
                 if duck.enabled or raid.running or dungeon.running then
                     npcStatus.Text = "รอ: ปิด Duck/Raid/Dungeon อื่นก่อนครับ (เปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ)"
@@ -5430,8 +5643,16 @@ local function startNpc()
                             task.wait(1)
                         else
                             local now = os.clock()
-                            local found = scanNpcModels(names)
-                            updateNpcMarkers(root, found)
+                            if now - foundAt >= 0.25 then
+                                found, foundAt = scanNpc(), now
+                            end
+                            -- มีประกาศเกิดแต่หาชื่อไม่เจอ → เดาจากปุ่ม E ที่เพิ่งโผล่
+                            local scanList = found
+                            if #found == 0 then
+                                local guess = guessFromRecentPrompt()
+                                if guess then scanList = {guess} end
+                            end
+                            updateNpcMarkers(root, scanList)
                             local maxRounds = math.max(0, math.floor(tonumber(npcMax.Text) or 0))
                             if maxRounds > 0 and npc.rounds >= maxRounds then
                                 npcStatus.Text = "ครบ " .. npc.rounds .. " ครั้งตามที่ตั้งไว้ ปิด AUTO แล้ว"
@@ -5442,28 +5663,43 @@ local function startNpc()
                                 npcStatus.Text = "รอ: มีระบบอื่น (เช่น Mini Boss) กำลังตีอยู่ก่อน..."
                                 task.wait(0.15)
                             else
-                                local target = nearestNpc(root, found)
+                                local target = pickNpc(root, scanList)
                                 if not target then
-                                    npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. " ... (คุยไปแล้ว " .. npc.rounds .. " ครั้ง)"
+                                    local hint = ""
+                                    if now < npc.hintUntil then
+                                        hint = "\nได้ยินประกาศเกิดของ [" .. tostring(npc.hintName) .. "] แล้ว แต่ยังไม่เจอตัวในแมพฝั่งเรา — กดปุ่ม \"สแกนข้อมูล NPC + คัดลอก\" ตอนนี้แล้วส่งผลมาให้ผมได้เลยครับ"
+                                    end
+                                    npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. " ... (คุยไปแล้ว " .. npc.rounds .. " ครั้ง)" .. hint
                                     task.wait(0.1)
                                 elseif target.model == lastModel and now - lastAt < 30 then
                                     -- คุยตัวนี้ไปแล้วเมื่อกี้ กันกดค้าง E ซ้ำตัวเดิมรัวๆ
                                     npcStatus.Text = "คุยกับ " .. target.model.Name .. " ไปแล้ว รอตัวถัดไป..."
                                     task.wait(0.3)
                                 else
-                                    npcStatus.Text = "เจอ " .. target.model.Name .. "! กำลังวาร์ปไปคุย..."
+                                    npcStatus.Text = "เจอ " .. target.model.Name .. (target.guessed and " (เดาจากปุ่ม E ที่เพิ่งโผล่)" or "") .. "! กำลังวาร์ปไปคุย..."
                                     local warped, warpMsg = warpToNpc(target)
                                     if not warped then
                                         npcStatus.Text = "วาร์ปไม่สำเร็จ: " .. tostring(warpMsg)
                                         task.wait(0.3)
                                     else
                                         task.wait(0.15)
-                                        local prompt = findNpcPrompt(target.model)
+                                        local prompt = target.prompt
+                                        if not prompt or not prompt:IsDescendantOf(workspace) then
+                                            prompt = findNpcPrompt(target.model)
+                                        end
+                                        if not prompt then
+                                            local part = target.part
+                                            prompt = part and part:IsDescendantOf(workspace) and nearbyPrompt(part.Position, 25) or nil
+                                        end
                                         if not prompt then
                                             npcStatus.Text = "วาร์ปถึง " .. target.model.Name .. " แล้วแต่หาปุ่ม E ไม่เจอ (อาจหายไปแล้ว)"
                                             task.wait(0.3)
                                         else
                                             npcStatus.Text = "กดค้าง E คุยกับ " .. target.model.Name .. "..."
+                                            pcall(function()
+                                                prompt.RequiresLineOfSight = false
+                                                prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 30)
+                                            end)
                                             pcall(function() prompt:InputHoldBegin() end)
                                             task.wait(math.max(0, prompt.HoldDuration) + 0.3)
                                             pcall(function() prompt:InputHoldEnd() end)
@@ -5493,11 +5729,156 @@ local function startNpc()
     end)
 end
 
+-- ===== ปุ่มสแกนข้อมูล: ดูดข้อมูลจริงของ NPC/ปุ่ม E/ของที่เพิ่งเกิด ไว้ส่งให้ผมแก้ชื่อให้ตรง =====
+local function posOf(inst)
+    local ok, pos = pcall(function()
+        if inst:IsA("BasePart") then return inst.Position end
+        if inst:IsA("Model") then return inst:GetPivot().Position end
+        if inst:IsA("ProximityPrompt") then return duckPromptPosition(inst) end
+        local part = inst:FindFirstAncestorWhichIsA("BasePart")
+        if part then return part.Position end
+        local model = inst:FindFirstAncestorWhichIsA("Model")
+        return model and model:GetPivot().Position or nil
+    end)
+    return ok and pos or nil
+end
+
+local function distText(root, inst)
+    local pos = posOf(inst)
+    if pos and root then return tostring(math.floor((root.Position - pos).Magnitude)) .. " studs" end
+    return "ไม่ทราบตำแหน่ง"
+end
+
+local function dumpNpcInfo()
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local wanted = wantedList()
+    local lines = {}
+    local function add(text) table.insert(lines, text) end
+
+    local streaming = "?"
+    pcall(function() streaming = tostring(workspace.StreamingEnabled) end)
+    add("=== NPC พิเศษ DUMP (Autokey v2.51) ===")
+    add("ชื่อที่ค้นหา: " .. npcNames.Text .. " | StreamingEnabled=" .. streaming .. " | index=" .. (function()
+        local n = 0
+        for _ in pairs(npc.index) do n += 1 end
+        return n
+    end)())
+    add("โหมดเฝ้าพิเศษจากประกาศ: " .. (os.clock() < npc.hintUntil and ("เปิดอยู่ (" .. tostring(npc.hintName) .. ")") or "ปิด"))
+
+    -- 1) ทุกอย่างใน workspace ที่ชื่อ/ข้อความตรงกับลิสต์ (ทุกคลาส)
+    add("")
+    add("== [1] สิ่งที่ชื่อ/ข้อความตรงกับลิสต์ (workspace) ==")
+    local hits = 0
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        local why
+        local _, s1 = matchWanted(obj.Name, wanted)
+        if s1 then why = "Name=" .. obj.Name end
+        if not why and obj:IsA("Humanoid") then
+            local _, s2 = matchWanted(obj.DisplayName, wanted)
+            if s2 then why = "DisplayName=" .. obj.DisplayName end
+        end
+        if not why and obj:IsA("ProximityPrompt") then
+            local _, s3 = matchWanted(obj.ObjectText, wanted)
+            local _, s4 = matchWanted(obj.ActionText, wanted)
+            if s3 or s4 then why = "ObjectText=" .. obj.ObjectText .. " ActionText=" .. obj.ActionText end
+        end
+        if not why and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
+            local _, s5 = matchWanted(stripRichText(obj.Text), wanted)
+            if s5 then why = "Text=" .. stripRichText(obj.Text) end
+        end
+        if why then
+            hits += 1
+            if hits <= 40 then
+                add(obj.ClassName .. " | " .. obj:GetFullName() .. " | " .. why .. " | " .. distText(root, obj))
+            end
+        end
+    end
+    add("รวม " .. hits .. " จุด" .. (hits > 40 and " (แสดง 40 อันแรก)" or ""))
+    if hits == 0 then add("(ไม่เจอชื่อตรงกับลิสต์ใน workspace เลย = ตอนนี้ยังไม่มีตัวจริงโหลดมาฝั่งเรา หรือชื่อในเกมเป็นอย่างอื่น)") end
+
+    -- ชื่อที่ตรงใน ReplicatedStorage (เผื่อ NPC เก็บเป็นต้นแบบไว้ที่นั่น)
+    local repHits = 0
+    pcall(function()
+        for _, obj in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+            local _, s = matchWanted(obj.Name, wanted)
+            if s then
+                repHits += 1
+                if repHits <= 15 then add("ReplicatedStorage: " .. obj.ClassName .. " | " .. obj:GetFullName()) end
+            end
+        end
+    end)
+
+    -- 2) ของที่เพิ่งเกิดใหม่ล่าสุด
+    add("")
+    add("== [2] Model/Humanoid ที่เพิ่งเกิดล่าสุด (ใหม่สุดอยู่บน) ==")
+    local now = os.clock()
+    for i = #npc.recent, math.max(1, #npc.recent - 24), -1 do
+        local item = npc.recent[i]
+        if item.inst.Parent then
+            local label = item.inst.Name
+            if item.inst:IsA("Humanoid") then label = label .. " (DisplayName=" .. item.inst.DisplayName .. ")" end
+            add(string.format("%.0f วิที่แล้ว | %s | %s | %s", now - item.at, item.inst.ClassName, item.inst:GetFullName(), distText(root, item.inst)))
+        end
+    end
+    add("")
+    add("== [3] ProximityPrompt (ปุ่ม E) ที่เพิ่งเกิดล่าสุด ==")
+    for i = #npc.recentPrompts, math.max(1, #npc.recentPrompts - 14), -1 do
+        local item = npc.recentPrompts[i]
+        local p = item.inst
+        if p.Parent then
+            add(string.format("%.0f วิที่แล้ว | %s | ObjectText=%s | ActionText=%s | %s", now - item.at, p:GetFullName(), p.ObjectText, p.ActionText, distText(root, p)))
+        end
+    end
+
+    -- 4) ปุ่ม E ทั้งหมดที่โหลดอยู่ เรียงตามระยะ
+    add("")
+    add("== [4] ProximityPrompt ทั้งหมดใน workspace (ใกล้สุดก่อน สูงสุด 80) ==")
+    local prompts = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            local pos = duckPromptPosition(obj)
+            table.insert(prompts, {p = obj, d = pos and root and (root.Position - pos).Magnitude or math.huge})
+        end
+    end
+    table.sort(prompts, function(a, b) return a.d < b.d end)
+    for i = 1, math.min(80, #prompts) do
+        local p = prompts[i].p
+        add(string.format("%s | ObjectText=%s | ActionText=%s | Hold=%.1f | Key=%s | Enabled=%s | %s studs",
+            p:GetFullName(), p.ObjectText, p.ActionText, p.HoldDuration, tostring(p.KeyboardKeyCode), tostring(p.Enabled),
+            prompts[i].d == math.huge and "?" or tostring(math.floor(prompts[i].d))))
+    end
+    add("รวม " .. #prompts .. " ปุ่ม")
+
+    -- 5) แชทล่าสุด
+    add("")
+    add("== [5] แชท/ประกาศล่าสุดที่จับได้ ==")
+    for i = #npc.chat, math.max(1, #npc.chat - 14), -1 do
+        add(string.format("%.0f วิที่แล้ว | %s", now - npc.chat[i].at, npc.chat[i].text))
+    end
+    if #npc.chat == 0 then add("(ยังไม่เคยจับข้อความแชทได้เลย)") end
+
+    local report = table.concat(lines, "\n")
+    print(report)
+    local copyFunction = setclipboard or toclipboard
+    local copied = false
+    if copyFunction then copied = pcall(copyFunction, report) end
+    npcStatus.Text = (copied and "คัดลอกข้อมูลแล้ว วางส่งให้ผมได้เลยครับ" or "ตัวรันนี้ไม่มีคำสั่งคัดลอก ดูข้อมูลใน Console (F9) แล้วก๊อปมาให้ผมครับ")
+        .. " • เจอชื่อตรง " .. hits .. " จุด, ปุ่ม E " .. #prompts .. " ปุ่ม"
+end
+
 npcButton.Activated:Connect(function()
     if npc.running then
         stopNpc("หยุด NPC Auto แล้ว")
     else
         startNpc()
+    end
+end)
+npcDump.Activated:Connect(function()
+    local ok, err = pcall(dumpNpcInfo)
+    if not ok then
+        npcStatus.Text = "สแกนไม่สำเร็จ: " .. tostring(err)
+        warn("NPC dump:", err)
     end
 end)
 npcMax.FocusLost:Connect(function()
