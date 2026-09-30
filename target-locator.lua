@@ -1,4 +1,4 @@
--- Autokey v2.57 (Duck boss fight now uses the same hover-above-boss + skill loop as Raid/Mini Boss instead of warp-then-wait gating that often never cast skills)
+-- Autokey v2.58 (Raid opener: if holding E does not open the Raid Boss window, retry up to 4 times (re-find prompt, widen range, fireproximityprompt, re-warp) instead of failing the whole Raid)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.57",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.58",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.57" or "Anti-AFK: OFF  •  v2.57")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.58" or "Anti-AFK: OFF  •  v2.58")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -2485,31 +2485,59 @@ local function raidRound(alive, pause, fight)
         if not prompt then return "fail", "ไม่พบปุ่ม E: Open Raid ที่จุดที่บันทึก\nบันทึกจุดกด E ใหม่" end
         raid.prompt = prompt
 
-        -- 2) กดค้าง E
-        raidSay("กดค้าง E: Open Raid...")
-        raid.held = prompt
-        prompt:InputHoldBegin()
-        if not pause(math.max(0, prompt.HoldDuration) + 0.25) then return "cancel" end
-        endRaidHold()
-
-        -- 3) รอหน้า Raid Boss แล้วกด Open
-        -- บางจังหวะเกมจะข้ามหน้าต่าง Raid Boss ไปเลย แล้วขึ้นป้าย "Already Spawned" ทันทีตอนกดค้าง E
-        -- (ไม่มีปุ่ม Open ให้กดเลย) จึงต้องเช็คป้ายนี้ระหว่างรอ popup ด้วย ไม่ใช่รอจนครบ 6 วิเฉยๆ
-        raidSay("รอหน้า Raid Boss ขึ้น...")
+        -- 2)+3) กดค้าง E แล้วรอหน้า Raid Boss: บางครั้งกดค้างแล้วหน้าต่างไม่เปิด (เกมไม่รับการกด/ยังไม่นิ่ง/ปุ่มถูกสร้างใหม่)
+        -- v2.58: ไม่ยอมแพ้ทันที ลองใหม่ได้ถึง 4 ครั้ง: หาปุ่มใหม่ถ้าปุ่มเดิมหาย + ขยายระยะกด + ครั้งที่ 3 ใช้ fireproximityprompt + ครั้งที่ 2 วาร์ปเข้าจุดใหม่
         local earlySpawnedNotice = false
-        deadline = os.clock() + 6
-        while alive() and os.clock() < deadline do
-            button, windowLabel = findRaidOpenButton()
-            if button then break end
-            if findSpawnedNotice() then
-                earlySpawnedNotice = true
-                break
+        button, windowLabel = nil, nil
+        for holdTry = 1, 4 do
+            if not prompt or not prompt.Parent or not prompt:IsDescendantOf(workspace) then
+                local _, rootNow = duckCharacter()
+                prompt = rootNow and findOpenRaidPrompt(rootNow) or nil
+                if not prompt then break end
+                raid.prompt = prompt
             end
-            task.wait(0.15)
+            pcall(function()
+                prompt.RequiresLineOfSight = false
+                prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 30)
+            end)
+            raidSay("กดค้าง E: Open Raid..." .. (holdTry > 1 and (" (ลองครั้งที่ " .. holdTry .. ")") or ""))
+            if holdTry == 3 and typeof(fireproximityprompt) == "function" then
+                pcall(fireproximityprompt, prompt)
+                if not pause(0.5) then return "cancel" end
+            else
+                raid.held = prompt
+                prompt:InputHoldBegin()
+                if not pause(math.max(0, prompt.HoldDuration) + 0.25) then return "cancel" end
+                endRaidHold()
+            end
+
+            raidSay("รอหน้า Raid Boss ขึ้น...")
+            -- บางจังหวะเกมจะข้ามหน้าต่าง Raid Boss ไปเลย แล้วขึ้นป้าย "Already Spawned" ทันที
+            -- (ไม่มีปุ่ม Open ให้กดเลย) จึงต้องเช็คป้ายนี้ระหว่างรอ popup ด้วย
+            deadline = os.clock() + (holdTry == 4 and 6 or 3)
+            while alive() and os.clock() < deadline do
+                button, windowLabel = findRaidOpenButton()
+                if button then break end
+                if findSpawnedNotice() then
+                    earlySpawnedNotice = true
+                    break
+                end
+                task.wait(0.15)
+            end
+            if not alive() then return "cancel" end
+            if button or earlySpawnedNotice then break end
+            if holdTry == 2 then
+                -- ครั้งที่ 2 ยังไม่ขึ้น: วาร์ปเข้าจุดกด E ใหม่อีกรอบ เผื่อยืนคลาดตำแหน่ง
+                local characterNow, rootNow = duckCharacter()
+                if characterNow then
+                    raidMoveTo(characterNow, rootNow, raid.promptPose)
+                    if not pause(0.8) then return "cancel" end
+                end
+            end
         end
         if not alive() then return "cancel" end
         if not button and not earlySpawnedNotice then
-            return "fail", "ไม่พบหน้า Raid Boss หรือปุ่ม Open ภายใน 6 วินาที"
+            return "fail", "ไม่พบหน้า Raid Boss หรือปุ่ม Open (กดค้าง E ซ้ำ 4 ครั้งแล้วหน้าต่างก็ยังไม่เปิด)\nเช็คว่ายืนถูกจุด ไม่ได้พิมพ์แชทอยู่ และไม่มีเมนูอื่นบังอยู่"
         end
 
         local spawnedNotice = earlySpawnedNotice
@@ -5913,7 +5941,7 @@ local function dumpNpcInfo()
 
     local streaming = "?"
     pcall(function() streaming = tostring(workspace.StreamingEnabled) end)
-    add("=== NPC พิเศษ DUMP (Autokey v2.57) ===")
+    add("=== NPC พิเศษ DUMP (Autokey v2.58) ===")
     add("ชื่อที่ค้นหา: " .. npcNames.Text .. " | StreamingEnabled=" .. streaming .. " | index=" .. (function()
         local n = 0
         for _ in pairs(npc.index) do n += 1 end
