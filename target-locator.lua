@@ -1,4 +1,4 @@
--- Autokey v2.52 (Performance: NPC พิเศษ hooks only while AUTO is ON, memoized name matching, cached windows/labels for Gacha + Craft/Inventory scans, throttled craft rescans, no craft list rebuild when tab hidden)
+-- Autokey v2.53 (NPC พิเศษ: talk-NPCs become followers so each is talked to once, tracks collected N/N and stops when all collected; default name Trunk; ESP hides collected followers)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.52",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.53",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.52" or "Anti-AFK: OFF  •  v2.52")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.53" or "Anti-AFK: OFF  •  v2.53")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -5297,7 +5297,7 @@ local npcNames = create("TextBox", {
     Position = UDim2.fromOffset(0, 90), Size = UDim2.new(1, 0, 0, 32),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
-    Text = "Vegeta, Bardock, Goten, Gohan, Trunks", ClearTextOnFocus = false,
+    Text = "Vegeta, Bardock, Goten, Gohan, Trunk", ClearTextOnFocus = false,
     PlaceholderText = "ชื่อ NPC คั่นด้วย , เช่น Vegeta, Bardock, Goten, Gohan",
     TextXAlignment = Enum.TextXAlignment.Left,
 }, npcPage)
@@ -5345,6 +5345,7 @@ local npc = {
     chat = {},           -- ข้อความแชท/ประกาศล่าสุด
     hintUntil = 0, hintAt = 0, hintName = nil,
     wantedText = nil, wantedCache = {}, memo = {}, memoSize = 0, hooked = false,
+    talked = {}, collected = {}, collectedCount = 0, -- ตัวที่คุยแล้ว (จะวิ่งตามเรา) / ชื่อที่รวมได้แล้ว
 }
 
 -- แปลง "Vegeta, Bardock" เป็นลิสต์ชื่อ
@@ -5365,6 +5366,8 @@ local function wantedList()
         local list = {}
         for _, name in ipairs(parseNpcNames(text)) do
             local n = normalizeDuck(name)
+            -- "Trunks" -> "trunk" (ในเกมชื่อ Trunk/TrunkNPC) กันพิมพ์ s เกินแล้วหาไม่เจอ
+            if #n >= 6 and n:sub(-1) == "s" then n = n:sub(1, -2) end
             if #n >= 2 then table.insert(list, n) end
         end
         npc.wantedCache = list
@@ -5684,6 +5687,7 @@ local function startNpc()
     local token = npc.token
     npc.running = true
     npc.rounds = 0
+    npc.talked, npc.collected, npc.collectedCount = {}, {}, 0
     raid.npcRunning = true
     npc.hooksOn()
     npcButton.Text = "NPC AUTO: ON — กดเพื่อหยุด"
@@ -5718,10 +5722,14 @@ local function startNpc()
                                 found, foundAt = scanNpc(), now
                             end
                             -- มีประกาศเกิดแต่หาชื่อไม่เจอ → เดาจากปุ่ม E ที่เพิ่งโผล่
-                            local scanList = found
-                            if #found == 0 then
+                            -- ตัวที่คุยแล้วจะวิ่งมาอยู่กับเรา ข้ามไปเลย (คุยซ้ำอาจยกเลิกการตาม) เหลือแต่ตัวใหม่ที่ยังไม่ได้คุย
+                            local scanList = {}
+                            for _, e in ipairs(found) do
+                                if not npc.talked[e.model] then table.insert(scanList, e) end
+                            end
+                            if #scanList == 0 then
                                 local guess = guessFromRecentPrompt()
-                                if guess then scanList = {guess} end
+                                if guess and not npc.talked[guess.model] then scanList = {guess} end
                             end
                             updateNpcMarkers(root, scanList)
                             local maxRounds = math.max(0, math.floor(tonumber(npcMax.Text) or 0))
@@ -5740,7 +5748,7 @@ local function startNpc()
                                     if now < npc.hintUntil then
                                         hint = "\nได้ยินประกาศเกิดของ [" .. tostring(npc.hintName) .. "] แล้ว แต่ยังไม่เจอตัวในแมพฝั่งเรา — กดปุ่ม \"สแกนข้อมูล NPC + คัดลอก\" ตอนนี้แล้วส่งผลมาให้ผมได้เลยครับ"
                                     end
-                                    npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. " ... (คุยไปแล้ว " .. npc.rounds .. " ครั้ง)" .. hint
+                                    npcStatus.Text = "กำลังเฝ้ารอ: " .. table.concat(names, ", ") .. "\nรวมแล้ว " .. npc.collectedCount .. "/" .. #names .. " ตัว (ครบแล้วค่อยไปทำพลังใหม่)" .. hint
                                     task.wait(0.1)
                                 elseif target.model == lastModel and now - lastAt < 30 then
                                     -- คุยตัวนี้ไปแล้วเมื่อกี้ กันกดค้าง E ซ้ำตัวเดิมรัวๆ
@@ -5776,8 +5784,22 @@ local function startNpc()
                                             pcall(function() prompt:InputHoldEnd() end)
                                             npc.rounds += 1
                                             lastModel, lastAt = target.model, now
-                                            npcStatus.Text = "คุยกับ " .. target.model.Name .. " สำเร็จ (" .. npc.rounds .. " ครั้ง)"
-                                                .. " • ถ้ามีเมนูขึ้นมาต่อ (เช่นเลือกทำพลังใหม่) กดเลือกเองต่อได้เลยครับ • กำลังเฝ้ารอตัวถัดไป..."
+                                            npc.talked[target.model] = true
+                                            local modelKey = normalizeDuck(target.model.Name)
+                                            local key = modelKey
+                                            for _, w in ipairs(wantedList()) do
+                                                if modelKey:find(w, 1, true) then key = w break end
+                                            end
+                                            if not npc.collected[key] then
+                                                npc.collected[key] = true
+                                                npc.collectedCount += 1
+                                            end
+                                            if npc.collectedCount >= #wantedList() then
+                                                npcStatus.Text = "รวมครบ " .. npc.collectedCount .. "/" .. #wantedList() .. " ตัวแล้ว! ปิด AUTO ให้ ไปทำพลังใหม่ได้เลยครับ"
+                                                return
+                                            end
+                                            npcStatus.Text = "คุยกับ " .. target.model.Name .. " สำเร็จ • รวมแล้ว " .. npc.collectedCount .. "/" .. #wantedList()
+                                                .. " ตัว • กำลังเฝ้ารอตัวถัดไป... (ถ้าตัวไหนไม่ตาม กดหยุดแล้วเริ่มใหม่เพื่อคุยซ้ำได้)"
                                             task.wait(1)
                                         end
                                     end
@@ -5831,7 +5853,7 @@ local function dumpNpcInfo()
 
     local streaming = "?"
     pcall(function() streaming = tostring(workspace.StreamingEnabled) end)
-    add("=== NPC พิเศษ DUMP (Autokey v2.52) ===")
+    add("=== NPC พิเศษ DUMP (Autokey v2.53) ===")
     add("ชื่อที่ค้นหา: " .. npcNames.Text .. " | StreamingEnabled=" .. streaming .. " | index=" .. (function()
         local n = 0
         for _ in pairs(npc.index) do n += 1 end
