@@ -1,4 +1,4 @@
--- Autokey v2.56 (NPC พิเศษ: collected count is now live (talked NPCs still in map) and survives AUTO stop/start; new buttons: mark nearby NPCs as talked, reset count)
+-- Autokey v2.57 (Duck boss fight now uses the same hover-above-boss + skill loop as Raid/Mini Boss instead of warp-then-wait gating that often never cast skills)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.56",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.57",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.56" or "Anti-AFK: OFF  •  v2.56")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.57" or "Anti-AFK: OFF  •  v2.57")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -1569,6 +1569,12 @@ local function clearDuckBoss()
     for _, connection in ipairs(duckConnections) do connection:Disconnect() end
     table.clear(duckConnections)
     if duckMarker then duckMarker.gui:Destroy() duckMarker = nil end
+    -- ปล่อยตัวละครจากการลอยเหนือหัวบอส (ตั้งไว้ตอนสู้บอสเป็ด) เฉพาะที่ระบบเป็ดเป็นคนล็อกเอง
+    if duck.hovering then
+        duck.hovering = false
+        raid.fighting = false
+        raid.hoverPart = nil
+    end
     duck.boss = nil
     duck.deathSeen = false
     duck.visitedCharacter = nil
@@ -1709,6 +1715,7 @@ local function duckStep()
         releaseSkillKeys()
         duck.combatReady = false
         duck.stableSince = nil
+        if duck.hovering then duck.hovering = false; raid.fighting = false; raid.hoverPart = nil end
         if duck.phase == "HOLD" or duck.phase == "WAIT_SPAWN"
             or (duck.phase == "RETURN" and duck.spawnDeadline) then
             stopDuck("หยุด: ตัวละครไม่พร้อมระหว่างเสก\nตรวจว่าบอสเกิดแล้วหรือไม่ก่อนเปิดใหม่")
@@ -1738,6 +1745,7 @@ local function duckStep()
             releaseSkillKeys()
             duck.combatReady = false
             duck.stableSince = nil
+            if duck.hovering then duck.hovering = false; raid.fighting = false; raid.hoverPart = nil end
             duck.missingSince = duck.missingSince or now
             duckStatus.Text = "บอสหายจากข้อมูลที่โหลด แต่ยังไม่ยืนยันว่าตาย\nรอโหลดกลับก่อน ยังไม่เสกตัวใหม่"
             if now - duck.missingSince >= 15 then
@@ -1751,45 +1759,28 @@ local function duckStep()
             if now >= duck.warpDeadline then stopDuck("รอตำแหน่งบอสไม่สำเร็จ ลองใหม่เมื่อโหลดครบ") end
             return
         end
-        local distance = (root.Position - part.Position).Magnitude
-        if duck.visitedCharacter ~= character or distance > 35 then
+        -- v2.57: สู้แบบเดียวกับ Raid/Mini Boss: Heartbeat กลางล็อกตัวลอยเหนือหัวบอสทุกเฟรม แล้วรอ 0.6 วิให้นิ่งก่อนเริ่มกดสกิล
+        -- (ของเดิมวาร์ปเข้าหา แล้วรอนิ่ง/แอนิเมชัน/ความเร็ว/หลายชั้น จนหลายครั้งค้างที่ "รอ" แล้วไม่กดสกิลเลย)
+        if now >= (duck.equipAt or 0) then
+            duck.equipAt = now + 1
+            if raid.equipWeapon then raid.equipWeapon(character) end
+        end
+        if duck.hoverBoss ~= boss then
+            duck.hoverBoss = boss
             duck.combatReady = false
             duck.stableSince = nil
             releaseSkillKeys()
-            local ready, reason = duckMovementReady(character, root)
-            if not ready then
-                duckStatus.Text = "พักสกิลก่อนเข้าหาบอส: " .. reason
-                return
-            end
-            if now < (duck.nextApproachAt or 0) then
-                duckStatus.Text = "กำลังรอตำแหน่งหลังวาร์ป ยังไม่ส่งสกิล..."
-                return
-            end
-            if (duck.retries or 0) >= 3 then
-                duckStatus.Text = "AUTO ยังเปิดอยู่ แต่พักสกิล: วาร์ปยังไม่ถึงบอส\nเข้าหาบอสเอง หรือปิด/เปิด DUCK AUTO เพื่อลองใหม่"
-                return
-            end
-            local ok, message = warp(boss)
-            if not ok then duckStatus.Text = message return end
-            duck.visitedCharacter = character
-            duck.retries = (duck.retries or 0) + 1
-            duck.nextApproachAt = now + 3
-            duckStatus.Text = "วาร์ปไปบอสแล้ว รอให้ตัวนิ่งก่อนใช้สกิล..."
-            return
         end
-        if root.Anchored or root.AssemblyLinearVelocity.Magnitude > 25 then
-            duck.combatReady = false
-            duck.stableSince = nil
-            duckStatus.Text = "พักสกิล: รอให้ตัวนิ่งใกล้บอส..."
-            return
-        end
+        duck.hovering = true
+        raid.fighting = true
+        raid.hoverPart = part
+        raid.hoverOffset = raid.bossHeight or 30
         if not duck.combatReady then
-            if now < (duck.nextApproachAt or 0) or actionAnimationPlaying(character) then
-                duckStatus.Text = "รอหลังวาร์ป/แอนิเมชันก่อนเริ่มสกิล..."
+            duck.stableSince = duck.stableSince or now
+            if now - duck.stableSince < 0.6 then
+                duckStatus.Text = "เข้าตำแหน่งเหนือหัวบอส..."
                 return
             end
-            duck.stableSince = duck.stableSince or now
-            if now - duck.stableSince < 1 then return end
             duck.combatReady = true
             duck.retries = 0
         end
@@ -2411,6 +2402,8 @@ local function equipRaidWeapon(character, nameOverride)
         end
     end
 end
+
+raid.equipWeapon = equipRaidWeapon -- ให้ระบบเป็ดเรียกถืออาวุธได้ (ระบบเป็ดประกาศไว้ก่อนฟังก์ชันนี้)
 
 -- กดปุ่มหนึ่งครั้ง (กดลง-ปล่อย) เช่น J เปิดบัฟเพิ่มพลัง: ปุ่มนี้กดซ้ำจะปิด จึงกดแค่รอบละครั้ง
 local RAID_BUFF_KEY = "J"
@@ -5920,7 +5913,7 @@ local function dumpNpcInfo()
 
     local streaming = "?"
     pcall(function() streaming = tostring(workspace.StreamingEnabled) end)
-    add("=== NPC พิเศษ DUMP (Autokey v2.56) ===")
+    add("=== NPC พิเศษ DUMP (Autokey v2.57) ===")
     add("ชื่อที่ค้นหา: " .. npcNames.Text .. " | StreamingEnabled=" .. streaming .. " | index=" .. (function()
         local n = 0
         for _ in pairs(npc.index) do n += 1 end
