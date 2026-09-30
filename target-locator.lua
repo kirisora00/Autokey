@@ -1,4 +1,4 @@
--- Autokey v2.53 (NPC พิเศษ: talk-NPCs become followers so each is talked to once, tracks collected N/N and stops when all collected; default name Trunk; ESP hides collected followers)
+-- Autokey v2.54 (NPC พิเศษ: fix false positives (warped to Kame House island): ignore huge map models, sign/prompt-text hits need exact name, must own an E prompt; ESP shows hit reason)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.53",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.54",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.53" or "Anti-AFK: OFF  •  v2.53")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.54" or "Anti-AFK: OFF  •  v2.54")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -5346,6 +5346,7 @@ local npc = {
     hintUntil = 0, hintAt = 0, hintName = nil,
     wantedText = nil, wantedCache = {}, memo = {}, memoSize = 0, hooked = false,
     talked = {}, collected = {}, collectedCount = 0, -- ตัวที่คุยแล้ว (จะวิ่งตามเรา) / ชื่อที่รวมได้แล้ว
+    sizeOk = setmetatable({}, {__mode = "k"}),       -- แคชว่าโมเดลนี้ขนาดเท่า NPC (ไม่ใช่โมเดลแมพยักษ์)
 }
 
 -- แปลง "Vegeta, Bardock" เป็นลิสต์ชื่อ
@@ -5479,18 +5480,31 @@ local function nearbyPrompt(position, radius)
 end
 
 -- สแกนจาก index: จับชื่อ Model/Part, Humanoid.DisplayName, ข้อความป้าย, ข้อความปุ่ม E แล้วรวมเป็น "เจ้าของ" (โมเดล NPC) ตัวเดียว
+-- โมเดล NPC ตัวหนึ่งไม่ควรใหญ่เกิน ~80 studs (โมเดลเกาะ/บ้าน/แมพทั้งอันที่มีป้ายหรือปุ่มอยู่ข้างในจะถูกตัดทิ้ง
+-- v2.53 วาร์ปไป "Kame House island" เพราะเอาโมเดลแมพยักษ์มานับเป็น NPC)
+local function isNpcSized(inst)
+    if inst:IsA("BasePart") then return true end
+    local cached = npc.sizeOk[inst]
+    if cached ~= nil then return cached end
+    local ok, size = pcall(function() return inst:GetExtentsSize() end)
+    local result = ok and size.Magnitude <= 80
+    npc.sizeOk[inst] = result
+    return result
+end
+
 local function scanNpc()
     local wanted = wantedList()
     local owners, found = {}, {}
     if #wanted == 0 then return found end
-    local function consider(owner, score, prompt)
+    local function consider(owner, score, prompt, how)
         if not owner or not owner:IsDescendantOf(workspace) or isPlayer(owner) then return end
+        if not isNpcSized(owner) then return end
         local entry = owners[owner]
         if entry then
             if score > entry.score then entry.score = score end
             entry.prompt = entry.prompt or prompt
         else
-            entry = {model = owner, score = score, prompt = prompt}
+            entry = {model = owner, score = score, prompt = prompt, how = how}
             owners[owner] = entry
             table.insert(found, entry)
         end
@@ -5500,29 +5514,31 @@ local function scanNpc()
             npc.index[obj] = nil
         elseif obj:IsA("Model") then
             local _, score = matchWanted(obj.Name, wanted)
-            if score then consider(obj, score) end
+            if score then consider(obj, score, nil, "ชื่อ") end
         elseif obj:IsA("Humanoid") then
             local _, score = matchWanted(obj.DisplayName, wanted)
             if not score then _, score = matchWanted(obj.Name, wanted) end
-            if score and obj.Parent and obj.Parent:IsA("Model") then consider(obj.Parent, score) end
+            if score and obj.Parent and obj.Parent:IsA("Model") then consider(obj.Parent, score, nil, "ชื่อ") end
         elseif obj:IsA("ProximityPrompt") then
             local _, score = matchWanted(obj.ObjectText, wanted)
             if not score then _, score = matchWanted(obj.ActionText, wanted) end
-            if score then consider(ownerOf(obj), score, obj) end
+            -- ข้อความปุ่ม/ป้ายต้องตรงเป๊ะถึงจะนับ (ข้อความยาวๆ ที่แค่พูดถึงชื่อ เช่นป้ายเควส จะไม่ถูกนับเป็นตัว NPC)
+            if score == 2 then consider(ownerOf(obj), score, obj, "ปุ่ม E") end
         elseif obj:IsA("TextLabel") or obj:IsA("TextButton") then
             local _, score = matchWanted(stripRichText(obj.Text), wanted)
-            if score then consider(ownerOf(obj), score) end
+            if score == 2 then consider(ownerOf(obj), score, nil, "ป้าย") end
         elseif obj:IsA("BasePart") then
             local _, score = matchWanted(obj.Name, wanted)
-            if score then consider(obj:FindFirstAncestorWhichIsA("Model") or obj, score) end
+            if score then consider(obj:FindFirstAncestorWhichIsA("Model") or obj, score, nil, "Part") end
         end
     end
     local kept = {}
     for _, entry in ipairs(found) do
         entry.part = partOf(entry.model)
         if entry.part then
-            entry.prompt = entry.prompt or findNpcPrompt(entry.model)
-            table.insert(kept, entry)
+            -- NPC คุยได้ต้องมีปุ่ม E: ไม่มีของตัวเองก็ดูปุ่มที่อยู่ติดตัว (ใน 10 studs) ถ้าไม่มีเลยไม่ใช่ NPC คุย ข้ามไป
+            entry.prompt = entry.prompt or findNpcPrompt(entry.model) or nearbyPrompt(entry.part.Position, 10)
+            if entry.prompt then table.insert(kept, entry) end
         end
     end
     return kept
@@ -5536,7 +5552,7 @@ local function guessFromRecentPrompt()
         local prompt = item.inst
         if item.at >= npc.hintAt - 3 and prompt.Parent and prompt:IsDescendantOf(workspace) and prompt.Enabled then
             local owner = ownerOf(prompt)
-            if owner and not isPlayer(owner) then
+            if owner and not isPlayer(owner) and isNpcSized(owner) then
                 local part = partOf(owner) or (prompt.Parent:IsA("BasePart") and prompt.Parent) or nil
                 if part then
                     return {model = owner, part = part, prompt = prompt, score = 0, guessed = true}
@@ -5595,7 +5611,7 @@ local function updateNpcMarkers(root, found)
         local marker = npcMarkers[model]
         marker.gui.Adornee = part
         local distance = root and math.floor((root.Position - part.Position).Magnitude)
-        marker.label.Text = "NPC: " .. model.Name .. (entry.guessed and " (เดา)" or "") .. (distance and (" • " .. distance .. " studs") or "")
+        marker.label.Text = "NPC: " .. model.Name .. (entry.guessed and " (เดา)" or (entry.how and (" [" .. entry.how .. "]") or "")) .. (distance and (" • " .. distance .. " studs") or "")
         marker.label.TextColor3 = Color3.fromRGB(255, 210, 60)
     end
     for model, marker in pairs(npcMarkers) do
@@ -5620,6 +5636,7 @@ do
         for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
         table.clear(conns)
         table.clear(npc.index)
+        table.clear(npc.sizeOk)
     end
     function npc.hooksOn()
         if npc.hooked then return end
@@ -5853,7 +5870,7 @@ local function dumpNpcInfo()
 
     local streaming = "?"
     pcall(function() streaming = tostring(workspace.StreamingEnabled) end)
-    add("=== NPC พิเศษ DUMP (Autokey v2.53) ===")
+    add("=== NPC พิเศษ DUMP (Autokey v2.54) ===")
     add("ชื่อที่ค้นหา: " .. npcNames.Text .. " | StreamingEnabled=" .. streaming .. " | index=" .. (function()
         local n = 0
         for _ in pairs(npc.index) do n += 1 end
