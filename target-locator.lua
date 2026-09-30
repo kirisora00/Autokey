@@ -1,4 +1,4 @@
--- Autokey v2.51 (NPC พิเศษ: fuzzy name match on Model/Part/Humanoid.DisplayName/billboard text/ProximityPrompt text, chat-announcement watcher with recent-prompt fallback, incremental index, diagnostic clipboard dump button)
+-- Autokey v2.52 (Performance: NPC พิเศษ hooks only while AUTO is ON, memoized name matching, cached windows/labels for Gacha + Craft/Inventory scans, throttled craft rescans, no craft list rebuild when tab hidden)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.51",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.52",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.51" or "Anti-AFK: OFF  •  v2.51")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.52" or "Anti-AFK: OFF  •  v2.52")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -3899,9 +3899,16 @@ local function parseAbbrev(text)
     return number * (mult[suffix:lower()] or 1)
 end
 
+-- จำ label เพชรไว้ ไม่ไล่สแกน PlayerGui ทั้งจอทุกรอบสุ่ม (เดิมสแกนทุกรอบ = กระตุกเป็นช่วงๆ)
 local function readDiamonds()
+    local cached = gacha.diamondLabel
+    if cached and cached.Parent and cached:IsDescendantOf(playerGui) then
+        return parseAbbrev(cached.Text), cached.Text
+    end
+    gacha.diamondLabel = nil
     for _, obj in ipairs(playerGui:GetDescendants()) do
         if obj:IsA("TextLabel") and obj.Name == "DiamondText" and not obj:IsDescendantOf(gui) then
+            gacha.diamondLabel = obj
             return parseAbbrev(obj.Text), obj.Text
         end
     end
@@ -3926,6 +3933,16 @@ end
 
 local function findGachaWindow(amount)
     local wanted = "openx" .. amount
+    -- ใช้หน้าต่างเดิมที่เจอไว้ถ้ายังเปิดอยู่ (ไม่ต้องไล่ทั้ง GUI + ไล่ลูกทุกชั้นซ้ำทุกครั้ง)
+    local cache = gacha.winCache
+    if cache and cache.amount == amount then
+        local win = cache.win
+        if win.button.Parent and win.button:IsDescendantOf(playerGui) and win.label.Parent
+            and win.label:IsDescendantOf(playerGui) and guiVisible(win.button) then
+            return win
+        end
+    end
+    gacha.winCache = nil
     for _, obj in ipairs(playerGui:GetDescendants()) do
         if obj:IsA("GuiButton") and not obj:IsDescendantOf(gui) and guiVisible(obj)
             and normalizeDuck(buttonText(obj)) == wanted then
@@ -3942,7 +3959,11 @@ local function findGachaWindow(amount)
                 if title then break end
                 scope = scope.Parent
             end
-            if title then return {button = obj, label = title, scope = scope} end
+            if title then
+                local win = {button = obj, label = title, scope = scope}
+                gacha.winCache = {amount = amount, win = win}
+                return win
+            end
         end
     end
     return nil
@@ -4095,7 +4116,9 @@ local function startGacha()
                     if not pause(0.2) then return end
                     if gachaSignature(win) ~= before then changed = true break end
                 end
-                local notice = gachaNotice()
+                -- ข้อความเตือน (เพชรไม่พอ/กระเป๋าเต็ม) จะขึ้นตอนสุ่มไม่สำเร็จ จึงสแกนเฉพาะตอนหน้าจอไม่เปลี่ยน หรือทุกๆ 8 ครั้งกันพลาด
+                local notice = nil
+                if not changed or (gacha.pulls % 8 == 0) then notice = gachaNotice() end
                 if notice then
                     gachaStop("หยุด: เกมแจ้ง \"" .. notice .. "\" • สุ่มไป " .. gacha.pulls .. " ครั้ง")
                     return
@@ -4246,14 +4269,25 @@ end
 
 -- ไต่ขึ้นไปแค่พอให้เจอทั้งป้าย MATERIALS REQUIRED และปุ่ม Craft อยู่ในกรอบเดียวกัน (กรอบเล็กสุดที่ครอบทั้งคู่)
 -- ถ้าไต่ขึ้นไปจนสุด ScreenGui (เช่น HUD หลักที่ครอบทั้งจอ รวม Health/EXP) จะทำให้จับข้อมูลอื่นที่ไม่เกี่ยวมาปนด้วย
+local craftWindowCache = nil
 local function findCraftWindow()
+    -- ใช้หน้าต่างเดิมถ้ายังเปิดอยู่ ไม่ไล่ PlayerGui ทั้งจอซ้ำ
+    local cache = craftWindowCache
+    if cache and cache.label.Parent and cache.label:IsDescendantOf(playerGui) and guiVisible(cache.label)
+        and cache.scope:IsDescendantOf(playerGui) then
+        return cache.label, cache.scope
+    end
+    craftWindowCache = nil
     for _, label in ipairs(playerGui:GetDescendants()) do
         if label:IsA("TextLabel") and not label:IsDescendantOf(gui) and guiVisible(label)
             and normalizeDuck(stripRichText(label.Text)) == "materialsrequired" then
             local scope = label.Parent
             for _ = 1, 6 do
                 if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
-                if findCraftButton(scope) then return label, scope end
+                if findCraftButton(scope) then
+                    craftWindowCache = {label = label, scope = scope}
+                    return label, scope
+                end
                 scope = scope.Parent
             end
         end
@@ -4373,14 +4407,23 @@ local function findButtonByText(scope, wanted)
     return nil
 end
 
+local inventoryWindowCache = nil
 local function findInventoryWindow()
+    local cached = inventoryWindowCache
+    if cached and cached.Parent and cached:IsDescendantOf(playerGui) and guiVisible(cached) then
+        return cached
+    end
+    inventoryWindowCache = nil
     for _, label in ipairs(playerGui:GetDescendants()) do
         if label:IsA("TextLabel") and not label:IsDescendantOf(gui) and guiVisible(label)
             and normalizeDuck(stripRichText(label.Text)) == "inventory" then
             local scope = label.Parent
             for _ = 1, 6 do
                 if not scope or scope == playerGui or scope:IsA("ScreenGui") then break end
-                if findButtonByText(scope, "all") then return scope end
+                if findButtonByText(scope, "all") then
+                    inventoryWindowCache = scope
+                    return scope
+                end
                 scope = scope.Parent
             end
         end
@@ -4431,8 +4474,11 @@ local function captureInventory(manual)
         if manual then craftStatus.Text = "ไม่พบหน้าต่าง INVENTORY ที่เปิดอยู่ตอนนี้ (กดปุ่ม INV ในเกมค้างไว้)" end
         return false
     end
-    local allButton = findButtonByText(scope, "all")
-    if allButton then pressGuiButton(allButton) end
+    -- กดปุ่ม All แค่ตอนกดจับเอง หรือทุก 30 วิ (เดิมกดทุก 2 วิ ทำให้กระเป๋ารีเฟรชซ้ำๆ จนกระตุก)
+    if manual or os.clock() - inventoryCapturedAt > 30 then
+        local allButton = findButtonByText(scope, "all")
+        if allButton then pressGuiButton(allButton) end
+    end
     local counts = scanInventoryCounts(scope)
     local found = 0
     for _ in pairs(counts) do found += 1 end
@@ -4587,17 +4633,20 @@ craftTab.Activated:Connect(function() showPage("craft") end)
 
 -- อัปเดตอายุข้อมูล ("จับเมื่อ ... วินาทีที่แล้ว") เป็นระยะ และสแกนหาหน้าต่างคราฟต์อัตโนมัติ
 task.spawn(function()
-    local nextAgeRefresh = 0
+    local nextAgeRefresh, nextCapture = 0, 0
     while running do
         task.wait(2)
         scanCurrency() -- เบามาก อ่านค่าที่แคชไว้แล้ว ปล่อยให้ทำงานตลอดได้ไม่กระตุก
         -- การหาหน้าต่างคราฟต์/กระเป๋าต้องไล่สแกน GUI ทั้งจอ ถ้าปล่อยให้ทำงานตลอดเวลาแม้ไม่ได้เปิดแท็บนี้ดู
         -- จะกินแรงจนเกมกระตุก จึงสแกนเฉพาะตอนเปิดแท็บ Craft ดูอยู่เท่านั้น
-        if craftAutoScan and currentPage == "craft" then
-            captureCraftWindow(false)
-            captureInventory(false)
+        if craftAutoScan and currentPage == "craft" and os.clock() >= nextCapture then
+            local gotCraft = captureCraftWindow(false)
+            local gotInv = captureInventory(false)
+            -- ไม่เจอหน้าต่างเลย = ห่างขึ้น (การหาต้องไล่ GUI ทั้งจอ) เจอแล้วค่อยถี่
+            nextCapture = os.clock() + ((gotCraft or gotInv) and 2 or 6)
         end
-        if os.clock() >= nextAgeRefresh and #craftOrder > 0 then
+        -- ไม่ต้องสร้างการ์ดใหม่ถ้าแท็บ Craft ไม่ได้เปิดดูอยู่ (สร้าง/ทำลาย Frame ทุก 5 วิ = กระตุก)
+        if currentPage == "craft" and os.clock() >= nextAgeRefresh and #craftOrder > 0 then
             nextAgeRefresh = os.clock() + 5
             rebuildCraftList()
         end
@@ -5295,7 +5344,7 @@ local npc = {
     recentPrompts = {},  -- ProximityPrompt ที่เพิ่งเกิดใหม่ (ใช้เป็นตัวเดาสำรองตอนมีประกาศ)
     chat = {},           -- ข้อความแชท/ประกาศล่าสุด
     hintUntil = 0, hintAt = 0, hintName = nil,
-    wantedText = nil, wantedCache = {},
+    wantedText = nil, wantedCache = {}, memo = {}, memoSize = 0, hooked = false,
 }
 
 -- แปลง "Vegeta, Bardock" เป็นลิสต์ชื่อ
@@ -5319,21 +5368,37 @@ local function wantedList()
             if #n >= 2 then table.insert(list, n) end
         end
         npc.wantedCache = list
+        npc.memo, npc.memoSize = {}, 0
     end
     return npc.wantedCache
 end
 
 -- เช็คว่าข้อความมีชื่อในลิสต์อยู่ไหม คืน (ชื่อที่ตรง, คะแนน) 2 = ตรงเป๊ะ 1 = มีคำนี้อยู่ในข้อความ; ข้อความยาวเกินไม่นับ (กันป้ายบรรยายยาวๆ)
+-- จำผลต่อข้อความ (ชื่อโมเดล/ป้ายซ้ำๆ เยอะมาก) ไม่ต้อง gsub ซ้ำทุกรอบสแกน — สาเหตุหนึ่งที่เคยทำให้กระตุก
 local function matchWanted(text, wanted)
     if type(text) ~= "string" or text == "" or #text > 60 then return nil end
+    local memo = npc.memo
+    local cached = memo[text]
+    if cached ~= nil then
+        if cached then return cached[1], cached[2] end
+        return nil
+    end
     local nt = normalizeDuck(text)
-    if nt == "" or #nt > 40 then return nil end
-    for _, w in ipairs(wanted) do
-        if nt == w then return w, 2 end
+    local matchW, matchS
+    if nt ~= "" and #nt <= 40 then
+        for _, w in ipairs(wanted) do
+            if nt == w then matchW, matchS = w, 2 break end
+        end
+        if not matchW then
+            for _, w in ipairs(wanted) do
+                if nt:find(w, 1, true) then matchW, matchS = w, 1 break end
+            end
+        end
     end
-    for _, w in ipairs(wanted) do
-        if nt:find(w, 1, true) then return w, 1 end
-    end
+    if npc.memoSize >= 6000 then npc.memo, npc.memoSize = {}, 0; memo = npc.memo end
+    memo[text] = matchW and {matchW, matchS} or false
+    npc.memoSize += 1
+    if matchW then return matchW, matchS end
     return nil
 end
 
@@ -5347,8 +5412,11 @@ local function indexAdd(obj)
         or obj:IsA("TextLabel") or obj:IsA("TextButton") then
         npc.index[obj] = true
     elseif obj:IsA("BasePart") then
-        -- Part เยอะมาก เก็บเฉพาะที่ชื่อตรงกับลิสต์ตอนนี้
-        if matchWanted(obj.Name, wantedList()) then npc.index[obj] = true end
+        -- Part เยอะมาก เก็บเฉพาะที่ชื่อ (พิมพ์เล็ก) มีชื่อในลิสต์อยู่ตรงๆ เช็คแบบเบาสุด ไม่ผ่าน gsub
+        local lower = obj.Name:lower()
+        for _, w in ipairs(wantedList()) do
+            if lower:find(w, 1, true) then npc.index[obj] = true break end
+        end
     end
 end
 
@@ -5539,29 +5607,49 @@ local function clearNpcMarkers()
     table.clear(npcMarkers)
 end
 
--- ===== ตัวดักข้อมูลเบื้องหลัง (ทำงานตั้งแต่เปิดสคริปต์ เพื่อให้ dump มีประวัติ/ประกาศให้ดูแม้ยังไม่กด AUTO) =====
+-- ===== ตัวดักข้อมูล: เปิดเฉพาะตอนกด NPC AUTO (v2.51 ดักตลอดเวลา + ดัก PlayerGui ทำให้เกมกระตุกตอนกาชา/คราฟต์ จึงถอดออก) =====
+-- ฟังแชทแบบเบาอย่างเดียวที่เปิดไว้ตลอด (ข้อความมาไม่บ่อย); ส่วนที่ดัก workspace ทั้งแมพเปิดเฉพาะตอน AUTO ทำงาน
 do
-    local addedConn, removingConn, chatConn, guiConn
-    local function shutdown()
-        for _, c in ipairs({addedConn, removingConn, chatConn, guiConn}) do
-            if c then pcall(function() c:Disconnect() end) end
-        end
+    local conns, gen = {}, 0
+    function npc.hooksOff()
+        npc.hooked = false
+        gen += 1
+        for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+        table.clear(conns)
+        table.clear(npc.index)
     end
-    addedConn = workspace.DescendantAdded:Connect(function(obj)
-        if not running then shutdown() return end
-        indexAdd(obj)
-        if obj:IsA("ProximityPrompt") then
-            pushRing(npc.recentPrompts, {inst = obj, at = os.clock()}, 30)
-        elseif obj:IsA("Model") or obj:IsA("Humanoid") then
-            pushRing(npc.recent, {inst = obj, at = os.clock()}, 50)
-        end
-    end)
-    removingConn = workspace.DescendantRemoving:Connect(function(obj)
-        npc.index[obj] = nil
-    end)
-    -- แชทของ Roblox (TextChatService) + แชทเก่า + ป้ายประกาศที่เกมสร้างเอง (ดูเฉพาะข้อความที่มีคำว่า spawn)
+    function npc.hooksOn()
+        if npc.hooked then return end
+        npc.hooked = true
+        gen += 1
+        local myGen = gen
+        table.clear(npc.index)
+        conns[1] = workspace.DescendantAdded:Connect(function(obj)
+            if not running then npc.hooksOff() return end
+            indexAdd(obj)
+            if obj:IsA("ProximityPrompt") then
+                pushRing(npc.recentPrompts, {inst = obj, at = os.clock()}, 30)
+            elseif obj:IsA("Model") or obj:IsA("Humanoid") then
+                pushRing(npc.recent, {inst = obj, at = os.clock()}, 50)
+            end
+        end)
+        conns[2] = workspace.DescendantRemoving:Connect(function(obj)
+            npc.index[obj] = nil
+        end)
+        -- สร้าง index รอบแรกทีละก้อนเล็กๆ ไม่ให้เฟรมสะดุด
+        task.spawn(function()
+            local count = 0
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if gen ~= myGen or not npc.hooked then return end
+                indexAdd(obj)
+                count += 1
+                if count % 1500 == 0 then task.wait() end
+            end
+        end)
+    end
+    -- แชทของ Roblox (TextChatService) + แชทเก่า
     pcall(function()
-        chatConn = game:GetService("TextChatService").MessageReceived:Connect(function(message)
+        game:GetService("TextChatService").MessageReceived:Connect(function(message)
             onChatText(message.Text)
         end)
     end)
@@ -5569,24 +5657,6 @@ do
         local events = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
         local done = events and events:FindFirstChild("OnMessageDoneFiltering")
         if done then done.OnClientEvent:Connect(function(data) onChatText(data.Message) end) end
-    end)
-    guiConn = playerGui.DescendantAdded:Connect(function(obj)
-        if not obj:IsA("TextLabel") then return end
-        task.defer(function()
-            task.wait(0.05)
-            local ok, text = pcall(function() return obj.Text end)
-            if ok and type(text) == "string" and #text < 200 and text:lower():find("spawn", 1, true) then
-                onChatText(text)
-            end
-        end)
-    end)
-    task.spawn(function()
-        local count = 0
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            indexAdd(obj)
-            count += 1
-            if count % 4000 == 0 then task.wait() end
-        end
     end)
 end
 
@@ -5615,6 +5685,7 @@ local function startNpc()
     npc.running = true
     npc.rounds = 0
     raid.npcRunning = true
+    npc.hooksOn()
     npcButton.Text = "NPC AUTO: ON — กดเพื่อหยุด"
     npcButton.BackgroundColor3 = colors.green
     npcStatus.Text = "กำลังเฝ้ารอ NPC เกิด..."
@@ -5719,6 +5790,8 @@ local function startNpc()
         end)
         raid.npcRunning = false
         clearNpcMarkers()
+        -- ปิดตัวดักเมื่อจบรอบนี้จริง (ถ้ากดหยุดแล้วเริ่มใหม่ทันที รอบใหม่เป็นเจ้าของตัวดักต่อ)
+        if npc.token == token or not npc.running then npc.hooksOff() end
         if not ok then
             npcStatus.Text = "เกิด Error หยุดระบบ ดู Console"
             warn("NPC พิเศษ:", err)
@@ -5758,7 +5831,7 @@ local function dumpNpcInfo()
 
     local streaming = "?"
     pcall(function() streaming = tostring(workspace.StreamingEnabled) end)
-    add("=== NPC พิเศษ DUMP (Autokey v2.51) ===")
+    add("=== NPC พิเศษ DUMP (Autokey v2.52) ===")
     add("ชื่อที่ค้นหา: " .. npcNames.Text .. " | StreamingEnabled=" .. streaming .. " | index=" .. (function()
         local n = 0
         for _ in pairs(npc.index) do n += 1 end
@@ -5811,7 +5884,7 @@ local function dumpNpcInfo()
 
     -- 2) ของที่เพิ่งเกิดใหม่ล่าสุด
     add("")
-    add("== [2] Model/Humanoid ที่เพิ่งเกิดล่าสุด (ใหม่สุดอยู่บน) ==")
+    add("== [2] Model/Humanoid ที่เพิ่งเกิดล่าสุด (ใหม่สุดอยู่บน; บันทึกเฉพาะตอนเปิด NPC AUTO) ==")
     local now = os.clock()
     for i = #npc.recent, math.max(1, #npc.recent - 24), -1 do
         local item = npc.recent[i]
