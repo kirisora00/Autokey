@@ -1,4 +1,4 @@
--- Autokey v2.58 (Raid opener: if holding E does not open the Raid Boss window, retry up to 4 times (re-find prompt, widen range, fireproximityprompt, re-warp) instead of failing the whole Raid)
+-- Autokey v2.59 (Flight: position lock also applied before physics (Stepped); ignore skill-caused teleports/pushes while casting instead of accepting them as the new position; shows how many times skills pushed the character)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -247,12 +247,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.58",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.59",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.58" or "Anti-AFK: OFF  •  v2.58")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.59" or "Anti-AFK: OFF  •  v2.59")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -915,11 +915,27 @@ table.insert(flightConnections, RunService.Heartbeat:Connect(function()
     local f = flight
     if not running or not f or not f.cf then return end
     if player.Character ~= f.character or not f.root:IsDescendantOf(workspace) then return end
-    -- เกมวาร์ปตัวละครไกล (เข้า/ออกด่าน Raid) ให้ยอมรับตำแหน่งใหม่ ส่วนสกิลที่ดัน/พุ่งระยะสั้นยังถูกล็อก
-    if (f.root.Position - f.cf.Position).Magnitude > 200 then f.cf = f.root.CFrame end
+    -- (v2.59) ถ้าเพิ่งใช้สกิล/กำลังกดสกิล ห้ามยอมรับตำแหน่งใหม่ที่ไกลเกิน 200 (เดิมสกิลที่ดัน/วาร์ปตัวละครไกลๆ ถูกมองเป็น
+    -- "เกมวาร์ปเข้าด่าน" แล้วบินล็อกตำแหน่งใหม่ตามไปเรื่อยๆ จึงลอยไปไกลจากจุดยืน)
+    local skillBusy = next(skills.held) ~= nil or os.clock() < (skills.lastCastAt or -math.huge) + 3
+    local drift = (f.root.Position - f.cf.Position).Magnitude
+    if drift > 0.5 then
+        f.pushed = (f.pushed or 0) + 1
+        f.pushedAt = os.clock()
+    end
+    if drift > 200 and not skillBusy then f.cf = f.root.CFrame end
     f.root.CFrame = f.cf
     f.root.AssemblyLinearVelocity = Vector3.zero
     f.root.AssemblyAngularVelocity = Vector3.zero
+end))
+-- ล็อกตำแหน่งก่อนฟิสิกส์คำนวณด้วย (กันแรงจากสกิลสะสมระหว่างเฟรม)
+table.insert(flightConnections, RunService.Stepped:Connect(function()
+    local f = flight
+    if not running or not f or not f.cf then return end
+    if player.Character ~= f.character or not f.root:IsDescendantOf(workspace) then return end
+    if (f.root.Position - f.cf.Position).Magnitude > 200 then return end
+    f.root.CFrame = f.cf
+    f.root.AssemblyLinearVelocity = Vector3.zero
 end))
 
 table.insert(flightConnections, RunService.RenderStepped:Connect(function(dt)
@@ -931,7 +947,8 @@ table.insert(flightConnections, RunService.RenderStepped:Connect(function(dt)
             stopFlight("หยุดบินแล้ว เปิดใหม่เมื่อตัวละครพร้อมครับ")
             return
         end
-        if (f.root.Position - f.cf.Position).Magnitude > 200 then f.cf = f.root.CFrame end
+        local skillBusy = next(skills.held) ~= nil or os.clock() < (skills.lastCastAt or -math.huge) + 3
+        if (f.root.Position - f.cf.Position).Magnitude > 200 and not skillBusy then f.cf = f.root.CFrame end
         local camera = workspace.CurrentCamera
         if not camera then
             f.velocity.VectorVelocity = Vector3.zero
@@ -965,6 +982,10 @@ table.insert(flightConnections, RunService.RenderStepped:Connect(function(dt)
         f.root.CFrame = f.cf
         f.root.AssemblyLinearVelocity = Vector3.zero
         f.root.AssemblyAngularVelocity = Vector3.zero
+        if f.pushed and f.pushed > 0 and os.clock() - (f.statusAt or 0) > 1 then
+            f.statusAt = os.clock()
+            flyStatus.Text = "กำลังบิน • W/A/S/D + Space / Ctrl\nสกิล/เกมดันตัวละครไปแล้ว " .. f.pushed .. " เฟรม (ล็อกกลับตำแหน่งเดิมให้อัตโนมัติ)"
+        end
     end)
     if not ok then
         stopFlight("หยุดบินเพราะเกิด Error ดู Console")
