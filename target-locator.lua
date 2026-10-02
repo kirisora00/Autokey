@@ -1,4 +1,4 @@
--- Autokey v2.59 (Flight: position lock also applied before physics (Stepped); ignore skill-caused teleports/pushes while casting instead of accepting them as the new position; shows how many times skills pushed the character)
+-- Autokey v2.60 (Flight fix: the Anti-AFK Space tap (every ~90s idle) was read by Flight as the ascend key so the character crept upward while standing still; Flight now ignores Anti-AFK synthetic keys)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -63,11 +63,15 @@ task.spawn(function()
         if antiAfk.enabled and os.clock() - lastRealInput > 90 then
             local okInput, manager = pcall(function() return game:GetService("VirtualInputManager") end)
             if okInput and manager then
+                -- ติดธงไว้ให้ระบบบินรู้ว่าเป็นปุ่มจำลองของ Anti-AFK ไม่ใช่เราสั่งขึ้น (เดิมบินอ่านเป็น Space = ลอยขึ้นเอง)
+                antiAfk.sending = true
                 pcall(function()
                     manager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
                     task.wait(0.05)
                     manager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
                 end)
+                task.wait(0.1)
+                antiAfk.sending = false
             end
             lastRealInput = os.clock() -- กันสแปมถ้าโดน error ซ้ำ
         end
@@ -247,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.59",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.60",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.59" or "Anti-AFK: OFF  •  v2.59")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.60" or "Anti-AFK: OFF  •  v2.60")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -894,6 +898,7 @@ flightTab.Activated:Connect(function() showPage("flight") end)
 
 table.insert(flightConnections, UserInputService.InputBegan:Connect(function(input, processed)
     if processed or UserInputService:GetFocusedTextBox() or not flight then return end
+    if antiAfk.sending then return end
     pressed[input.KeyCode] = true
 end))
 table.insert(flightConnections, UserInputService.InputEnded:Connect(function(input)
