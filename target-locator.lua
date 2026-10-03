@@ -1,4 +1,4 @@
--- Autokey v2.62 (AUTO target (Devil Boat/Villain) now casts skills near the target; skill watchdog: stuck held keys auto-released, stuck "UnReady" labels fall back to timer; pressGuiButton fires each handler once; old Raid/Dungeon thread no longer clears another system's lock after stop)
+-- Autokey v2.63 (Shop auto-buy fix: read abbreviated Dungeon Point (1.31K), never mark rows "no effect" when the balance is abbreviated, reset skip memory on start, partial name match fallback, status lists rows found when nothing is buyable)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -251,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.62",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.63",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.62" or "Anti-AFK: OFF  •  v2.62")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.63" or "Anti-AFK: OFF  •  v2.63")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -6362,14 +6362,23 @@ local function findShopWindow()
 end
 
 -- อ่านยอด Dungeon Point ปัจจุบันจากป้าย "Dungeon Point: 990" ในกรอบร้าน
+-- คืน (จำนวน Point, ย่อหรือไม่) เช่น "Dungeon Point: 1.31K" -> 1310, true
+-- (v2.63) เดิมอ่านได้แค่เลขเต็ม พอ Point เกิน 1,000 เกมโชว์เป็น 1.31K เลยอ่านไม่ได้ (ขึ้น "?")
 local function findShopBalance(scope)
     for _, obj in ipairs(scope:GetDescendants()) do
         if obj:IsA("TextLabel") and guiVisible(obj) then
-            local value = normalizeDuck(stripRichText(obj.Text)):match("^dungeonpoint(%d+)$")
-            if value then return tonumber(value) end
+            local text = string.lower(stripRichText(obj.Text))
+            local num, suffix = text:match("^%s*dungeon%s*points?%s*:?%s*([%d%.,]+)%s*([kmbt]?)%s*$")
+            if num then
+                local value = tonumber((num:gsub(",", "")))
+                if value then
+                    local mult = ({k = 1e3, m = 1e6, b = 1e9, t = 1e12})[suffix] or 1
+                    return math.floor(value * mult + 0.5), suffix ~= ""
+                end
+            end
         end
     end
-    return nil
+    return nil, false
 end
 
 -- ไล่เก็บทุกแถวในร้าน (ชื่อไอเทม + ราคา + ปุ่ม) ครั้งเดียวจบ แล้วจับคู่ชื่อกับปุ่มที่อยู่แถวเดียวกัน
@@ -6383,7 +6392,7 @@ local function scanShopRows(scope)
         elseif obj:IsA("TextLabel") and guiVisible(obj) then
             local text = stripRichText(obj.Text)
             if text ~= "" and text ~= "Shop Dungeon"
-                and not normalizeDuck(text):match("^dungeonpoint%d+$") then
+                and not normalizeDuck(text):find("^dungeonpoint") then
                 table.insert(nameCandidates, obj)
             end
         end
@@ -6427,6 +6436,7 @@ local function startShopBuy()
     shop.running = true
     shop.bought = 0
     table.clear(shop.counts)
+    shop.noEffect, shop.skipUntil = {}, {} -- ล้างความจำ "แถวที่ข้าม" ของรอบก่อน
     shopButton.Text = "AUTO BUY: ON — กดเพื่อหยุด"
     shopButton.BackgroundColor3 = colors.green
     shopStatus.Text = "กำลังหาหน้าร้าน Shop Dungeon..."
@@ -6445,7 +6455,7 @@ local function startShopBuy()
                         shopStatus.Text = "เจอหน้าร้านแต่ยังอ่านรายการไอเทมไม่ได้ ลองปิดแล้วเปิดร้านใหม่"
                         task.wait(1)
                     else
-                        local balance = findShopBalance(scope)
+                        local balance, abbreviated = findShopBalance(scope)
                         local wanted = parseShopNames(shopNames.Text)
                         local wantedSet = nil
                         if #wanted > 0 then
@@ -6462,8 +6472,25 @@ local function startShopBuy()
                         shop.skipUntil = shop.skipUntil or {}
                         local bestRow, bestCount = nil, nil
                         if not (keepPoints > 0 and not balance) then
+                            -- ชื่อตรงเป๊ะก่อน ถ้าไม่มีแถวไหนตรงเลยค่อยยอมรับแบบ "มีคำนี้อยู่ในชื่อ"
+                            local anyExact = false
+                            if wantedSet then
+                                for _, row in ipairs(rows) do
+                                    if wantedSet[normalizeDuck(row.name)] then anyExact = true break end
+                                end
+                            end
+                            local function rowMatches(row)
+                                if not wantedSet then return true end
+                                local n = normalizeDuck(row.name)
+                                if wantedSet[n] then return true end
+                                if anyExact then return false end
+                                for w in pairs(wantedSet) do
+                                    if w ~= "" and (n:find(w, 1, true) or w:find(n, 1, true)) then return true end
+                                end
+                                return false
+                            end
                             for _, row in ipairs(rows) do
-                                local matches = not wantedSet or wantedSet[normalizeDuck(row.name)]
+                                local matches = rowMatches(row)
                                 if matches and (shop.skipUntil[row.name] or 0) <= os.clock() then
                                     local boughtCount = shop.counts[row.name] or 0
                                     if (maxEach == 0 or boughtCount < maxEach) and row.price <= budget then
@@ -6476,7 +6503,14 @@ local function startShopBuy()
                         end
 
                         if not bestRow then
-                            shopStatus.Text = string.format(
+                            local seen = {}
+                            for i = 1, math.min(#rows, 8) do
+                                local r = rows[i]
+                                local note = ""
+                                if (shop.skipUntil[r.name] or 0) > os.clock() then note = "(ข้ามชั่วคราว)" end
+                                table.insert(seen, r.name .. " " .. r.price .. note)
+                            end
+                            shopStatus.Text = "แถวที่เห็น: " .. table.concat(seen, ", ") .. "\n" .. string.format(
                                 "รอ... Point ปัจจุบัน %s (ซื้อไปแล้ว %d ชิ้น) ไม่มีไอเทมที่ซื้อได้ตอนนี้ (Point ไม่พอ/ซื้อครบตามที่ตั้งไว้แล้ว)",
                                 balance and tostring(balance) or "?", shop.bought
                             )
@@ -6485,7 +6519,8 @@ local function startShopBuy()
                             pressGuiButton(bestRow.button)
                             local pressWorked = true
                             -- รอให้เลข Point อัปเดตก่อนตัดสินใจครั้งต่อไป (เดิมกดรัวก่อนเลขเปลี่ยน ทำให้ใช้ Point เกินที่ตั้งเก็บไว้)
-                            if balance then
+                            -- เลขย่อ (1.31K) ซื้อของ 2 Point เลขไม่เปลี่ยน จึงใช้ตรวจ "ซื้อไม่ติด" ไม่ได้ ข้ามการตรวจไปเลย
+                            if balance and not abbreviated then
                                 local waitUntil = os.clock() + 2
                                 local changed = false
                                 while alive() and os.clock() < waitUntil do
