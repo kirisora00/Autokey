@@ -1,4 +1,4 @@
--- Autokey v2.61 (Code audit fixes: token-guarded cleanup for Mini Boss/NPC/Shop, headstand yields to other systems, NPC claims raid.fighting while warping+talking, exact weapon match first, Raid retry refreshes character, Gacha respects Mini Boss/NPC, dungeon restore on stop, Mini Boss skip memory, NPC count only listed names, Shop round-robin + balance wait, misc)
+-- Autokey v2.62 (AUTO target (Devil Boat/Villain) now casts skills near the target; skill watchdog: stuck held keys auto-released, stuck "UnReady" labels fall back to timer; pressGuiButton fires each handler once; old Raid/Dungeon thread no longer clears another system's lock after stop)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -251,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.61",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.62",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.61" or "Anti-AFK: OFF  •  v2.61")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.62" or "Anti-AFK: OFF  •  v2.62")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -463,21 +463,27 @@ local skillQuiet = create("TextBox", {
     Text = "6", TextSize = 16, ClearTextOnFocus = false, BorderSizePixel = 0,
 }, skillsPage)
 local skillToggle = create("TextButton", {
-    Position = UDim2.fromOffset(0, 244), Size = UDim2.new(1, 0, 0, 42),
+    Position = UDim2.fromOffset(0, 240), Size = UDim2.new(1, 0, 0, 36),
     BackgroundColor3 = colors.green, TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.GothamBold, TextSize = 15,
     Text = "BOSS SKILLS: ON — กดเพื่อปิด", BorderSizePixel = 0,
 }, skillsPage)
 local skillReadyToggle = create("TextButton", {
-    Position = UDim2.fromOffset(0, 292), Size = UDim2.new(1, 0, 0, 34),
+    Position = UDim2.fromOffset(0, 282), Size = UDim2.new(1, 0, 0, 30),
     BackgroundColor3 = colors.green, TextColor3 = Color3.new(1, 1, 1),
     Font = Enum.Font.GothamBold, TextSize = 13,
     Text = "ใช้สกิลทันทีที่ Ready (อ่านจากแผงสกิลเกม): ON", BorderSizePixel = 0,
 }, skillsPage)
+skills.autoToggle = create("TextButton", {
+    Position = UDim2.fromOffset(0, 318), Size = UDim2.new(1, 0, 0, 28),
+    BackgroundColor3 = colors.green, TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 13,
+    Text = "ใช้สกิลตอน AUTO เป้าหมาย (เรือ/Villain): ON", BorderSizePixel = 0,
+}, skillsPage)
 local skillStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 332), Size = UDim2.new(1, 0, 0, 40),
+    Position = UDim2.fromOffset(0, 350), Size = UDim2.new(1, 0, 0, 34),
     BackgroundTransparency = 1, TextColor3 = colors.muted,
-    TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+    TextSize = 13, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
     Text = "พร้อมรอ DUCK AUTO ถึงบอส\nหยุดส่งสกิลทันทีเมื่อบอสตาย และรอแอนิเมชันก่อนวาร์ป",
 }, skillsPage)
@@ -1369,15 +1375,26 @@ local function skillIsReady(key)
     return nil
 end
 
-local function useDuckSkill(character, root, boss)
+local function useDuckSkill(character, root, boss, allow)
     if not skills.enabled then return end
+    -- (v2.62) กันปุ่มสกิลค้าง: ถ้ามีปุ่มที่กดลงไว้นานเกิน 1 วิ (ตัวปล่อยปุ่มหลุด) ปล่อยให้เอง
+    -- (เดิมปุ่มค้างใน skills.held ตัวเดียว ระบบจะไม่กดสกิลอีกเลยตลอด = "ใช้ไปสักพักแล้วหยุดเอง")
+    skills.heldAt = skills.heldAt or {}
+    for heldKey in pairs(skills.held) do
+        local at = skills.heldAt[heldKey]
+        if not at or os.clock() - at > 1 then
+            pcall(function() sendSkillKey(heldKey, false) end)
+            skills.held[heldKey] = nil
+            skills.heldAt[heldKey] = nil
+        end
+    end
     if UserInputService:GetFocusedTextBox() then
         skillStatus.Text = "พักสกิลระหว่างพิมพ์ข้อความ"
         return
     end
     local inDuck = duck.enabled and duck.phase == "FIGHT" and duck.combatReady and not duck.deathSeen
     local inRaid = raid.fighting and raid.combatReady
-    if not (inDuck or inRaid) or boss.humanoid.Health <= 0 then return end
+    if not (inDuck or inRaid or allow) or boss.humanoid.Health <= 0 then return end
     if os.clock() < skills.gapUntil or next(skills.held) then return end
     -- โหมดตามคูลดาวน์: ไม่รอแอนิเมชันจบ ใช้ทันทีที่เกมบอกว่า Ready
     if not skills.readyMode and (root.Anchored or actionAnimationPlaying(character)) then
@@ -1396,6 +1413,18 @@ local function useDuckSkill(character, root, boss)
                 break
             end
             local ready = skillIsReady(candidate)
+            -- (v2.62) ป้าย "UnReady" ค้างนานเกิน 30 วิ = น่าจะอ่านป้ายผิดอัน (เช่นแผงสกิลเก่าหลังเปลี่ยนอาวุธ)
+            -- เลิกเชื่อป้ายนั้น ใช้เวลาเว้นแทน และสแกนแผงสกิลใหม่ (เดิมรอ Ready ที่ไม่มีวันมา สกิลเลยหยุดไปเอง)
+            skills.unreadySince = skills.unreadySince or {}
+            if ready == false then
+                skills.unreadySince[candidate] = skills.unreadySince[candidate] or os.clock()
+                if os.clock() - skills.unreadySince[candidate] > 30 then
+                    ready = nil
+                    skillLabelAt = -math.huge
+                end
+            else
+                skills.unreadySince[candidate] = nil
+            end
             -- ready == nil = อ่านสถานะไม่ได้ ใช้ตามเวลาเว้นระหว่างสกิลแทน
             if ready == true or (ready == nil and os.clock() >= skills.nextAt) then
                 key = candidate
@@ -1420,6 +1449,8 @@ local function useDuckSkill(character, root, boss)
     local ok, err = pcall(function()
         -- Remember the key before sending, so errors and cancellation still release it.
         skills.held[key] = true
+        skills.heldAt = skills.heldAt or {}
+        skills.heldAt[key] = os.clock()
         skills.lastCastAt = os.clock()
         skills.nextAt = os.clock() + skills.interval
         skills.gapUntil = os.clock() + (skills.readyMode and skills.minGap or skills.interval)
@@ -1471,6 +1502,14 @@ skillToggle.Activated:Connect(function()
     if not skills.enabled then releaseSkillKeys() end
     skillToggle.Text = skills.enabled and "BOSS SKILLS: ON — กดเพื่อปิด" or "BOSS SKILLS: OFF — กดเพื่อเปิด"
     skillToggle.BackgroundColor3 = skills.enabled and colors.green or colors.active
+end)
+skills.autoTarget = true
+skills.autoRange = 60
+skills.autoToggle.Activated:Connect(function()
+    skills.autoTarget = not skills.autoTarget
+    if not skills.autoTarget then releaseSkillKeys() end
+    skills.autoToggle.Text = "ใช้สกิลตอน AUTO เป้าหมาย (เรือ/Villain): " .. (skills.autoTarget and "ON" or "OFF")
+    skills.autoToggle.BackgroundColor3 = skills.autoTarget and colors.green or colors.active
 end)
 skillReadyToggle.Activated:Connect(function()
     skills.readyMode = not skills.readyMode
@@ -2057,12 +2096,19 @@ end
 
 local function pressGuiButton(btn, real)
     local fired = false
+    local firedFns = {}
     if not real and btn:IsA("GuiButton") and typeof(getconnections) == "function" then
         for _, signal in ipairs({btn.Activated, btn.MouseButton1Click, btn.MouseButton1Down, btn.MouseButton1Up}) do
             pcall(function()
                 for _, connection in ipairs(getconnections(signal)) do
-                    connection:Fire()
-                    fired = true
+                    -- (v2.62) ฟังก์ชันเดียวกันที่ผูกไว้หลายสัญญาณ ยิงแค่ครั้งเดียว (เดิมยิงซ้ำ ปุ่มสลับเปิด-ปิดจะกลับเป็นเหมือนเดิม)
+                    local fn
+                    pcall(function() fn = connection.Function end)
+                    if not (fn and firedFns[fn]) then
+                        if fn then firedFns[fn] = true end
+                        connection:Fire()
+                        fired = true
+                    end
                 end
             end)
         end
@@ -2880,8 +2926,9 @@ local function raidRound(alive, pause, fight)
         end
         task.wait(0.25)
     end
-    endFight()
+    -- (v2.62) ถูกสั่งหยุดแล้ว (raidStop ล้างให้แล้ว) ไม่ต้องล้างซ้ำ กันไปปิดการล็อกของระบบที่เพิ่งเริ่มแทน (เช่น Mini Boss)
     if not alive() then return "cancel" end
+    endFight()
 
     -- 7) หน้า Victory: กดปิด
     if not victory then
@@ -3738,9 +3785,9 @@ local function dungeonRound(alive, pause, fight)
         end
         task.wait(0.25)
     end
+    if not alive() then return "cancel" end -- dungeonStop ล้างให้แล้ว
     endFight()
     dungeonCleanup()
-    if not alive() then return "cancel" end
 
     -- 11) จบดัน
     if victory then
@@ -6583,6 +6630,29 @@ table.insert(flightConnections, RunService.Heartbeat:Connect(function()
 
     pcall(warp, locked)
 end))
+
+-- (v2.62) ใช้สกิลตอน AUTO เป้าหมาย (เช่นวาร์ปไปเรือ/Villain): ถึงใกล้เป้าแล้วกดสกิลตามหน้า Skills ให้เลย
+task.spawn(function()
+    local nextEquip = 0
+    while running do
+        task.wait(0.15)
+        if auto and locked and skills.enabled and skills.autoTarget
+            and not flight and not duck.enabled and not raid.fighting then
+            local ok, err = pcall(function()
+                local character, root = duckCharacter()
+                if not character or visitedCharacter ~= character or not isAlive(locked) then return end
+                local part = getPart(locked.model)
+                if not part or (root.Position - part.Position).Magnitude > (skills.autoRange or 60) then return end
+                if os.clock() >= nextEquip then
+                    nextEquip = os.clock() + 1
+                    equipRaidWeapon(character)
+                end
+                useDuckSkill(character, root, locked, true)
+            end)
+            if not ok then warn("AUTO skills:", err) task.wait(1) end
+        end
+    end
+end)
 
 local function update()
     local entries, total, root = collectTargets()
