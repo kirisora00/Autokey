@@ -1,4 +1,4 @@
--- Autokey v2.60 (Flight fix: the Anti-AFK Space tap (every ~90s idle) was read by Flight as the ascend key so the character crept upward while standing still; Flight now ignores Anti-AFK synthetic keys)
+-- Autokey v2.61 (Code audit fixes: token-guarded cleanup for Mini Boss/NPC/Shop, headstand yields to other systems, NPC claims raid.fighting while warping+talking, exact weapon match first, Raid retry refreshes character, Gacha respects Mini Boss/NPC, dungeon restore on stop, Mini Boss skip memory, NPC count only listed names, Shop round-robin + balance wait, misc)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -48,7 +48,7 @@ UserInputService.InputBegan:Connect(function(_, processed)
     if not processed then lastRealInput = os.clock() end
 end)
 player.Idled:Connect(function()
-    if not antiAfk.enabled then return end
+    if not running or not antiAfk.enabled then return end
     local ok, virtualUser = pcall(function() return game:GetService("VirtualUser") end)
     if ok and virtualUser then
         pcall(function()
@@ -251,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.60",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.61",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.60" or "Anti-AFK: OFF  •  v2.60")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.61" or "Anti-AFK: OFF  •  v2.61")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -663,7 +663,9 @@ local raidStatus = create("TextLabel", {
     raidBuffWeapon.FocusLost:Connect(refreshBuffWeaponButton)
     raidBuffWeaponKey.FocusLost:Connect(function()
         local key = raidBuffWeaponKey.Text:gsub("%s", "")
-        raidBuffWeaponKey.Text = key ~= "" and key:sub(1, 1):upper() or "F"
+        -- รับเฉพาะตัวอักษร A-Z (ตัวเลข/ภาษาไทยส่งเป็นปุ่มไม่ได้ เดิมรับไว้แล้วกดไม่ออกเงียบๆ)
+        local letter = key:sub(1, 1):upper()
+        raidBuffWeaponKey.Text = letter:match("^%a$") and letter or "F"
         refreshBuffWeaponButton()
     end)
 end)()
@@ -1407,9 +1409,11 @@ local function useDuckSkill(character, root, boss)
     if not initializeSkillInput() then
         skills.enabled = false
         skillToggle.Text = "BOSS SKILLS: OFF"
+        skillToggle.BackgroundColor3 = colors.active
         skillStatus.Text = "ตัวรันไม่รองรับการจำลองปุ่มสกิล"
         stopDuck("หยุด: ตัวรันไม่รองรับปุ่มสกิล ดูเมนู Skills")
         if raid.stop then raid.stop("หยุด: ตัวรันไม่รองรับปุ่มสกิล") end
+        if raid.mbStop and raid.miniBossRunning then raid.mbStop("หยุด: ตัวรันไม่รองรับปุ่มสกิล") end
         return
     end
     watchSkillAnimations(character)
@@ -1429,6 +1433,7 @@ local function useDuckSkill(character, root, boss)
         skillStatus.Text = "ส่งปุ่มไม่สำเร็จ ปิดแชต/เมนู Roblox แล้วลองใหม่\nหากยังไม่ได้ ตัวรันอาจไม่รองรับ"
         stopDuck("หยุด: ส่งสกิลไม่สำเร็จ ดูเมนู Skills และ Console")
         if raid.stop then raid.stop("หยุด: ส่งสกิลไม่สำเร็จ ดู Console") end
+        if raid.mbStop and raid.miniBossRunning then raid.mbStop("หยุด: ส่งสกิลไม่สำเร็จ ดู Console") end
         warn("Autokey skill input:", err)
         return
     end
@@ -1443,6 +1448,7 @@ local function useDuckSkill(character, root, boss)
                 if running then
                     stopDuck("หยุด: ปล่อยปุ่มสกิลไม่สำเร็จ ปิดแชต/เมนู Roblox")
                     if raid.stop then raid.stop("หยุด: ปล่อยปุ่มสกิลไม่สำเร็จ") end
+                    if raid.mbStop and raid.miniBossRunning then raid.mbStop("หยุด: ปล่อยปุ่มสกิลไม่สำเร็จ") end
                 end
                 warn("Autokey skill release:", releaseError)
             end
@@ -1616,6 +1622,7 @@ stopDuck = function(message)
     clearDuckBoss()
     duck.phase = "IDLE"
     duck.spawnDeadline = nil
+    duck.promptWaitSince = nil
     duckButton.Text = "DUCK AUTO: OFF — กดเพื่อเริ่ม"
     duckButton.BackgroundColor3 = colors.blue
     duckStatus.Text = message or "หยุดเสกเป็ดแล้ว"
@@ -1706,6 +1713,7 @@ local function attachDuckBoss(entry)
     end))
     duck.phase = "FIGHT"
     duck.spawnDeadline = nil
+    duck.promptWaitSince = nil
     duck.missingSince = nil
     duck.warpDeadline = os.clock() + DUCK_RETURN_TIMEOUT
     duckMarker = makeMarker(entry.part)
@@ -1728,6 +1736,7 @@ local function beginDuckReturn()
     duck.returnStableSince = nil
     duck.phase = "RETURN"
     duck.spawnDeadline = nil
+    duck.promptWaitSince = nil
     duck.deadline = os.clock() + DUCK_RETURN_TIMEOUT
     duck.returnMoved = false
 end
@@ -1781,6 +1790,7 @@ local function duckStep()
         end
         duck.missingSince = nil
         local part = getPart(boss.model)
+        if part then duck.warpDeadline = now + DUCK_RETURN_TIMEOUT end
         if not part then
             if now >= duck.warpDeadline then stopDuck("รอตำแหน่งบอสไม่สำเร็จ ลองใหม่เมื่อโหลดครบ") end
             return
@@ -1890,12 +1900,21 @@ local function duckStep()
         end
 
         -- No timer reset after holding starts; never duplicate an uncertain summon.
-        if not duck.spawnDeadline then duck.spawnDeadline = now + DUCK_SPAWN_TIMEOUT end
+        -- (v2.61) เริ่มนับ 10 วิ "บอสต้องเกิด" ก็ต่อเมื่อปุ่มเสกกดได้จริงแล้ว (เดิมนับตั้งแต่ยืนถึงจุด ถ้าปุ่มยังติดคูลดาวน์
+        -- จะหยุดทั้งระบบพร้อมข้อความผิดว่า "กดเสกแล้วบอสไม่เกิด") รอปุ่มได้สูงสุด 60 วิแยกต่างหาก
         local ready, reason = summonPromptReady(root)
         if not ready then
+            duck.promptWaitSince = duck.promptWaitSince or now
+            if now - duck.promptWaitSince > 60 then
+                duck.promptWaitSince = nil
+                stopDuck("หยุด: รอปุ่มเสกที่จุดเสกนานเกิน 60 วินาที (" .. tostring(reason) .. ")")
+                return
+            end
             duckStatus.Text = "รอจุดเสก: " .. reason
             return
         end
+        duck.promptWaitSince = nil
+        if not duck.spawnDeadline then duck.spawnDeadline = now + DUCK_SPAWN_TIMEOUT end
         duck.phase = "HOLD"
         duck.deadline = now + math.max(0, duck.prompt.HoldDuration) + 0.2
         duck.held = duck.prompt
@@ -2052,7 +2071,8 @@ local function pressGuiButton(btn, real)
     -- ตัวรันที่ไม่มี getconnections: คลิกจริงที่กลางปุ่ม
     local okInput, manager = pcall(function() return game:GetService("VirtualInputManager") end)
     if okInput and manager then
-        local inset = game:GetService("GuiService"):GetGuiInset()
+        local screenGui = btn:FindFirstAncestorOfClass("ScreenGui")
+        local inset = (screenGui and screenGui.IgnoreGuiInset) and Vector2.zero or game:GetService("GuiService"):GetGuiInset()
         local center = btn.AbsolutePosition + btn.AbsoluteSize / 2 + inset
         local sent = pcall(function()
             pcall(function() manager:SendMouseMoveEvent(center.X, center.Y, game) end)
@@ -2411,20 +2431,25 @@ local function equipRaidWeapon(character, nameOverride)
     if wanted == "" then return end
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not humanoid or humanoid.Health <= 0 then return end
-    local function matches(tool)
-        local name = normalizeDuck(tool.Name)
-        local tip = normalizeDuck(tool.ToolTip)
-        return name == wanted or tip == wanted or name:find(wanted, 1, true) ~= nil
+    -- (v2.61) หาแบบชื่อตรงเป๊ะก่อน ค่อยหาแบบ "มีคำนี้อยู่" (เดิมตั้ง SSJ แต่ถือ SSJ2 อยู่ก็นับว่าถือแล้ว เลยตีด้วยอาวุธผิดทั้งไฟต์)
+    local function exact(tool)
+        return normalizeDuck(tool.Name) == wanted or normalizeDuck(tool.ToolTip) == wanted
     end
-    for _, child in ipairs(character:GetChildren()) do
-        if child:IsA("Tool") and matches(child) then return end -- ถืออยู่แล้ว
+    local function partial(tool)
+        return normalizeDuck(tool.Name):find(wanted, 1, true) ~= nil
     end
     local backpack = player:FindFirstChildOfClass("Backpack")
-    if not backpack then return end
-    for _, tool in ipairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") and matches(tool) then
-            pcall(function() humanoid:EquipTool(tool) end)
-            return
+    for _, matches in ipairs({exact, partial}) do
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("Tool") and matches(child) then return end -- ถืออยู่แล้ว
+        end
+        if backpack then
+            for _, tool in ipairs(backpack:GetChildren()) do
+                if tool:IsA("Tool") and matches(tool) then
+                    pcall(function() humanoid:EquipTool(tool) end)
+                    return
+                end
+            end
         end
     end
 end
@@ -2495,6 +2520,15 @@ local function raidRound(alive, pause, fight)
     local RAID_OPEN_MAX_ATTEMPTS = 25   -- ~25 x ~9s ≈ 3-4 นาที ถ้ายัง Already Spawned เกินนี้ค่อยยอมแพ้
     local retryStart = os.clock()
     for attempt = 1, RAID_OPEN_MAX_ATTEMPTS do
+        -- (v2.61) เริ่มทุกรอบด้วยตัวละคร/ปุ่มปัจจุบัน (เดิมถ้าตายระหว่างรอ Already Spawned จะวาร์ปตัวเก่าที่หายไปแล้ว หรือ Error)
+        prompt = nil
+        character, root = duckCharacter()
+        if not character then
+            if attempt >= RAID_OPEN_MAX_ATTEMPTS then return "fail", "ตัวละครไม่พร้อม หยุดระบบ Raid" end
+            raidSay("รอตัวละครพร้อม...")
+            if not pause(1) then return "cancel" end
+            continue
+        end
         -- 1) วาร์ปไปจุดกด E แล้วหาปุ่ม (ปุ่มอาจถูกสร้างใหม่หลังจบรอบ)
         raidSay("วาร์ปไปจุด Open Raid...")
         raidMoveTo(character, root, raid.promptPose)
@@ -3297,6 +3331,9 @@ local function dungeonStop(message)
     endRaidHold()
     if releaseSkillKeys then releaseSkillKeys() end
     dungeonCleanup()
+    -- (v2.61) คืนหน้าต่าง Dungeon ที่ซ่อนไว้ (เดิมกดหยุดแล้วเปิดหน้าต่างเองด้วย E ไม่ขึ้น)
+    if dungeon.restore then dungeon.restore() end
+    dungeon.note = nil
     dungeonTestButton.Text = "ทดสอบ: E→ใส่→Spawn→เข้าวง"
     dungeonTestButton.BackgroundColor3 = colors.active
     dungeonAutoButton.Text = "DUNGEON AUTO: OFF — กดเพื่อวนลงดัน"
@@ -3594,6 +3631,9 @@ local function dungeonRound(alive, pause, fight)
                     reclicks += 1
                     lastClick = now
                     toggleAutoSkip(hud, pause)
+                    -- กดเปิด Auto Skip อาจบล็อกหลายวินาที ไม่ให้นับเป็น "ตีไม่ลดเลือด" แล้วข้ามเป้าหมายที่ยังตีได้
+                    track.since = os.clock()
+                    readySince = nil
                 end
             end
             local waveLabel = findWaveLabel()
@@ -3615,6 +3655,7 @@ local function dungeonRound(alive, pause, fight)
             raid.combatReady = false
             raid.hoverPart = nil
             readySince = nil
+            holding = false -- เกิดใหม่แล้วไม่ดึงกลับไปจุดที่ตาย
             releaseSkillKeys()
             dungeonSay("รอตัวละครเกิดใหม่...")
             task.wait(0.5)
@@ -4064,7 +4105,7 @@ end
 
 local function startGacha()
     if gacha.running then gachaStop("หยุดสุ่มแล้ว (สุ่มไป " .. gacha.pulls .. " ครั้ง)") return end
-    if auto or duck.enabled or raid.running or dungeon.running then
+    if auto or duck.enabled or raid.running or dungeon.running or raid.miniBossRunning or raid.npcRunning then
         gachaStatus.Text = "ปิด AUTO เป้าหมาย / Duck / Raid / Dungeon ก่อนใช้ระบบสุ่มครับ (เปิด Flight ได้)"
         return
     end
@@ -4130,7 +4171,7 @@ local function startGacha()
             end
 
             while alive() do
-                if auto or duck.enabled or raid.running or dungeon.running then
+                if auto or duck.enabled or raid.running or dungeon.running or raid.miniBossRunning or raid.npcRunning then
                     gachaStop("หยุดสุ่มเพราะเปิด AUTO/Duck/Raid/Dungeon อยู่")
                     return
                 end
@@ -4441,7 +4482,7 @@ local function scanCurrency()
             lost = true
         end
     end
-    if lost then currencyLabels = nil end
+    if lost or next(currencyLabels) == nil then currencyLabels = nil end
 end
 
 local function findButtonByText(scope, wanted)
@@ -4903,6 +4944,8 @@ end
 -- ถ้าเป้าหมายตาย/หายไป: ไม่หยุดทันที แต่รอ (สูงสุด 60 วิ) แล้วหาเป้าหมายชื่อเดิมที่เกิดใหม่มายืนต่อให้เอง
 table.insert(flightConnections, RunService.Heartbeat:Connect(function()
     if not running or not hs.enabled then return end
+    -- (v2.61) หลีกทางให้ระบบอื่นที่คุมตัวละครอยู่ (เดิมสองระบบแย่งตั้งตำแหน่งทุกเฟรม เช่น Mini Boss ตีจากบนหัวคนอื่น / NPC วาร์ปแล้วโดนดึงกลับ)
+    if raid.fighting or raid.running or dungeon.running or duck.enabled or flight then return end
     local lost = not hs.part or not hs.part.Parent
         or not (hs.humanoid and hs.humanoid.Parent and hs.humanoid.Health > 0)
     if lost then
@@ -5099,14 +5142,15 @@ local function parseMiniBossNames(text)
 end
 
 -- หาบอสที่ชื่อ "ตรงเป๊ะ" กับชื่อใดชื่อหนึ่งในลิสต์ (กันจับผิดตัวถ้าตั้งหลายชื่อพร้อมกัน)
-local function findMiniBoss(root, names)
+local function findMiniBoss(root, names, skip)
     local wanted = {}
     for _, n in ipairs(names) do wanted[normalizeDuck(n)] = true end
     local best, bestDist
     for humanoid in pairs(tracked) do
         local model = humanoid.Parent
         if model and model:IsA("Model") and humanoid.Health > 0
-            and humanoid:IsDescendantOf(workspace) and not isPlayer(model) then
+            and humanoid:IsDescendantOf(workspace) and not isPlayer(model)
+            and not (skip and (skip[humanoid] or 0) > os.clock()) then
             if wanted[normalizeDuck(model.Name)] or wanted[normalizeDuck(humanoid.DisplayName)] then
                 local part = getPart(model)
                 if part then
@@ -5121,7 +5165,7 @@ local function findMiniBoss(root, names)
     return best
 end
 
-local mb = {running = false, token = 0, rounds = 0}
+local mb = {running = false, token = 0, rounds = 0, skip = setmetatable({}, {__mode = "k"})}
 
 local function stopMiniBoss(message)
     mb.token += 1
@@ -5134,6 +5178,7 @@ local function stopMiniBoss(message)
     mbButton.BackgroundColor3 = colors.blue
     if message then mbStatus.Text = message end
 end
+raid.mbStop = stopMiniBoss -- ให้ระบบสกิล (ประกาศไว้ก่อน) สั่งหยุด Mini Boss ได้ตอนส่งปุ่มไม่สำเร็จ
 
 local function startMiniBoss()
     if normalizeDuck(mbNames.Text) == "" then
@@ -5164,7 +5209,13 @@ local function startMiniBoss()
             local readySince, sticky = nil, nil
             while alive() do
                 if duck.enabled or raid.running or dungeon.running then
-                    raid.fighting = false
+                    -- ปล่อยเฉพาะที่ Mini Boss ถือเอง (ไม่ไปปิด raid.fighting ของระบบเป็ด/Raid ที่กำลังใช้อยู่)
+                    if sticky then
+                        sticky = nil
+                        raid.fighting = false
+                        raid.hoverPart = nil
+                    end
+                    track.since = os.clock()
                     mbStatus.Text = "รอ: ปิด Duck/Raid/Dungeon อื่นก่อนครับ (เปิดคู่กับ AUTO เป้าหมาย/ตีเรือได้ปกติ)"
                     task.wait(1)
                 elseif not player.Character then
@@ -5208,7 +5259,7 @@ local function startMiniBoss()
                                 mbStatus.Text = "รอ: มีระบบอื่น (เช่น NPC พิเศษ) กำลังตีอยู่ก่อน..."
                                 task.wait(0.3)
                             else
-                            local target = sticky or findMiniBoss(root, names)
+                            local target = sticky or findMiniBoss(root, names, mb.skip)
                             if not target then
                                 raid.fighting = false
                                 raid.hoverPart = nil
@@ -5244,6 +5295,8 @@ local function startMiniBoss()
                                         task.wait(0.3)
                                     end
                                 end
+                                -- ถูกกดหยุดระหว่างรอบัฟ: ออกเลย ไม่ไปจอง raid.fighting ค้างไว้
+                                if not alive() then return end
                                 local health = target.humanoid.Health
                                 if health < track.hp - 0.5 then
                                     track.hp = health; track.since = now
@@ -5253,6 +5306,9 @@ local function startMiniBoss()
                                 if now - track.since > 20 then
                                     warn("Mini Boss: ข้ามเป้าหมายที่ไม่ลดเลือด " .. target.model.Name)
                                     mbStatus.Text = "ข้าม " .. target.model.Name .. " (เลือดไม่ลดนาน 20 วิ)"
+                                    -- จำไว้ข้ามตัวนี้ 30 วิ แล้วไปหาตัวอื่น (เดิมเลือกตัวเดิมซ้ำแล้วข้ามซ้ำทุก 0.5 วิ ไม่ได้ตีตัวอื่นเลย)
+                                    mb.skip[target.humanoid] = now + 30
+                                    track = {humanoid = nil, hp = 0, since = now}
                                     sticky = nil
                                     raid.fighting = false
                                     raid.hoverPart = nil
@@ -5279,17 +5335,20 @@ local function startMiniBoss()
                 end
             end
         end)
-        raid.fighting = false
-        raid.hoverPart = nil
-        raid.miniBossRunning = false
-        releaseSkillKeys()
         if not ok then
             mbStatus.Text = "เกิด Error หยุดระบบ ดู Console"
             warn("Mini Boss:", err)
         end
-        mb.running = false
-        mbButton.Text = "MINI BOSS AUTO: OFF — กดเพื่อเริ่ม"
-        mbButton.BackgroundColor3 = colors.blue
+        -- (v2.61) ล้างสถานะเฉพาะถ้ารอบนี้ยังเป็นรอบปัจจุบัน (กดหยุดแล้วเริ่มใหม่เร็วๆ รอบเก่าจะไม่ไปปิดรอบใหม่)
+        if mb.token == token then
+            raid.fighting = false
+            raid.hoverPart = nil
+            raid.miniBossRunning = false
+            releaseSkillKeys()
+            mb.running = false
+            mbButton.Text = "MINI BOSS AUTO: OFF — กดเพื่อเริ่ม"
+            mbButton.BackgroundColor3 = colors.blue
+        end
     end)
 end
 
@@ -5555,15 +5614,16 @@ local function scanNpc()
     local wanted = wantedList()
     local owners, found = {}, {}
     if #wanted == 0 then return found end
-    local function consider(owner, score, prompt, how)
+    local function consider(owner, score, prompt, how, word)
         if not owner or not owner:IsDescendantOf(workspace) or isPlayer(owner) then return end
         if not isNpcSized(owner) then return end
         local entry = owners[owner]
         if entry then
             if score > entry.score then entry.score = score end
             entry.prompt = entry.prompt or prompt
+            entry.key = entry.key or word
         else
-            entry = {model = owner, score = score, prompt = prompt, how = how}
+            entry = {model = owner, score = score, prompt = prompt, how = how, key = word}
             owners[owner] = entry
             table.insert(found, entry)
         end
@@ -5572,23 +5632,23 @@ local function scanNpc()
         if not obj.Parent or not obj:IsDescendantOf(workspace) then
             npc.index[obj] = nil
         elseif obj:IsA("Model") then
-            local _, score = matchWanted(obj.Name, wanted)
-            if score then consider(obj, score, nil, "ชื่อ") end
+            local w, score = matchWanted(obj.Name, wanted)
+            if score then consider(obj, score, nil, "ชื่อ", w) end
         elseif obj:IsA("Humanoid") then
-            local _, score = matchWanted(obj.DisplayName, wanted)
-            if not score then _, score = matchWanted(obj.Name, wanted) end
-            if score and obj.Parent and obj.Parent:IsA("Model") then consider(obj.Parent, score, nil, "ชื่อ") end
+            local w, score = matchWanted(obj.DisplayName, wanted)
+            if not score then w, score = matchWanted(obj.Name, wanted) end
+            if score and obj.Parent and obj.Parent:IsA("Model") then consider(obj.Parent, score, nil, "ชื่อ", w) end
         elseif obj:IsA("ProximityPrompt") then
-            local _, score = matchWanted(obj.ObjectText, wanted)
-            if not score then _, score = matchWanted(obj.ActionText, wanted) end
+            local w, score = matchWanted(obj.ObjectText, wanted)
+            if not score then w, score = matchWanted(obj.ActionText, wanted) end
             -- ข้อความปุ่ม/ป้ายต้องตรงเป๊ะถึงจะนับ (ข้อความยาวๆ ที่แค่พูดถึงชื่อ เช่นป้ายเควส จะไม่ถูกนับเป็นตัว NPC)
-            if score == 2 then consider(ownerOf(obj), score, obj, "ปุ่ม E") end
+            if score == 2 then consider(ownerOf(obj), score, obj, "ปุ่ม E", w) end
         elseif obj:IsA("TextLabel") or obj:IsA("TextButton") then
-            local _, score = matchWanted(stripRichText(obj.Text), wanted)
-            if score == 2 then consider(ownerOf(obj), score, nil, "ป้าย") end
+            local w, score = matchWanted(stripRichText(obj.Text), wanted)
+            if score == 2 then consider(ownerOf(obj), score, nil, "ป้าย", w) end
         elseif obj:IsA("BasePart") then
-            local _, score = matchWanted(obj.Name, wanted)
-            if score then consider(obj:FindFirstAncestorWhichIsA("Model") or obj, score, nil, "Part") end
+            local w, score = matchWanted(obj.Name, wanted)
+            if score then consider(obj:FindFirstAncestorWhichIsA("Model") or obj, score, nil, "Part", w) end
         end
     end
     local kept = {}
@@ -5740,19 +5800,22 @@ do
     end
     -- แชทของ Roblox (TextChatService) + แชทเก่า
     pcall(function()
-        game:GetService("TextChatService").MessageReceived:Connect(function(message)
+        table.insert(flightConnections, game:GetService("TextChatService").MessageReceived:Connect(function(message)
             onChatText(message.Text)
-        end)
+        end))
     end)
     pcall(function()
         local events = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
         local done = events and events:FindFirstChild("OnMessageDoneFiltering")
-        if done then done.OnClientEvent:Connect(function(data) onChatText(data.Message) end) end
+        if done then table.insert(flightConnections, done.OnClientEvent:Connect(function(data) onChatText(data.Message) end)) end
     end)
 end
 
 -- ชื่อที่ใช้นับ: ชื่อในลิสต์ที่โมเดลตัวนี้ตรง (กัน Trunk กับ TrunkNPC นับเป็นสองตัว)
-local function npcKeyOf(model)
+local function npcKeyOf(model, entry)
+    -- ใช้ชื่อในลิสต์ที่จับได้ตอนสแกน (DisplayName/ป้าย/ปุ่ม E) ก่อน; ตัวที่เดาจากประกาศใช้ชื่อที่ประกาศ
+    if entry and entry.key then return entry.key end
+    if entry and entry.guessed and npc.hintName then return npc.hintName end
     local modelKey = normalizeDuck(model.Name)
     for _, w in ipairs(wantedList()) do
         if modelKey:find(w, 1, true) then return w end
@@ -5763,9 +5826,12 @@ end
 -- นับสด: จำนวนชื่อที่คุยไปแล้วและตัวนั้นยังอยู่ในแมพ (ตัวที่หายไป/เกมรีเซ็ตแล้วไม่นับ); ค่าคงอยู่ข้ามการกดหยุด/เริ่ม
 local function countCollected()
     local keys, n = {}, 0
+    local valid = {}
+    for _, w in ipairs(wantedList()) do valid[w] = true end
     for model, key in pairs(npc.talked) do
         if model.Parent and model:IsDescendantOf(workspace) then
-            if not keys[key] then keys[key] = true; n += 1 end
+            -- (v2.61) นับเฉพาะชื่อที่อยู่ในลิสต์ (เดิมตัวที่ชื่อไม่ตรงก็ถูกนับ ทำให้ขึ้นว่าครบทั้งที่ยังไม่ครบ)
+            if valid[key] and not keys[key] then keys[key] = true; n += 1 end
         else
             npc.talked[model] = nil
         end
@@ -5774,6 +5840,7 @@ local function countCollected()
 end
 
 local function stopNpc(message)
+    if npc.ownsFight then npc.ownsFight = nil; raid.fighting = false end
     npc.token += 1
     npc.running = false
     raid.npcRunning = false
@@ -5810,6 +5877,8 @@ local function startNpc()
             local lastModel, lastAt = nil, 0
             local found, foundAt = {}, -1
             while alive() do
+                -- ปล่อยการจองคุมตัวละครที่ค้างจากรอบก่อน (วาร์ปไม่สำเร็จ/หาปุ่ม E ไม่เจอ)
+                if npc.ownsFight == token then npc.ownsFight = nil; raid.fighting = false end
                 if duck.enabled or raid.running or dungeon.running then
                     npcStatus.Text = "รอ: ปิด Duck/Raid/Dungeon อื่นก่อนครับ (เปิดคู่กับ AUTO เป้าหมาย/Mini Boss ได้ปกติ)"
                     task.wait(1)
@@ -5878,6 +5947,11 @@ local function startNpc()
                                     task.wait(0.3)
                                 else
                                     npcStatus.Text = "เจอ " .. target.model.Name .. (target.guessed and " (เดาจากปุ่ม E ที่เพิ่งโผล่)" or "") .. "! กำลังวาร์ปไปคุย..."
+                                    -- (v2.61) จองการคุมตัวละครระหว่างวาร์ป+กด E (hoverPart = nil จึงไม่โดนดึงไปลอย)
+                                    -- กัน AUTO เป้าหมาย (เช่นเรือ) ดึงตัวกลับไปก่อนคุยเสร็จ และให้ Mini Boss รอก่อน
+                                    raid.fighting = true
+                                    raid.hoverPart = nil
+                                    npc.ownsFight = token
                                     local warped, warpMsg = warpToNpc(target)
                                     if not warped then
                                         npcStatus.Text = "วาร์ปไม่สำเร็จ: " .. tostring(warpMsg)
@@ -5904,9 +5978,10 @@ local function startNpc()
                                             pcall(function() prompt:InputHoldBegin() end)
                                             task.wait(math.max(0, prompt.HoldDuration) + 0.3)
                                             pcall(function() prompt:InputHoldEnd() end)
+                                            if npc.ownsFight == token then npc.ownsFight = nil; raid.fighting = false end
                                             npc.rounds += 1
                                             lastModel, lastAt = target.model, now
-                                            npc.talked[target.model] = npcKeyOf(target.model)
+                                            npc.talked[target.model] = npcKeyOf(target.model, target)
                                             npc.collectedCount = countCollected()
                                             if npc.collectedCount >= #wantedList() then
                                                 npcStatus.Text = "รวมครบ " .. npc.collectedCount .. "/" .. #wantedList() .. " ตัวแล้ว! ปิด AUTO ให้ ไปทำพลังใหม่ได้เลยครับ"
@@ -5924,17 +5999,23 @@ local function startNpc()
                 end
             end
         end)
-        raid.npcRunning = false
-        clearNpcMarkers()
+        if npc.token == token or not npc.running then
+            raid.npcRunning = false
+            clearNpcMarkers()
+        end
+        if npc.ownsFight == token then npc.ownsFight = nil; raid.fighting = false end
         -- ปิดตัวดักเมื่อจบรอบนี้จริง (ถ้ากดหยุดแล้วเริ่มใหม่ทันที รอบใหม่เป็นเจ้าของตัวดักต่อ)
         if npc.token == token or not npc.running then npc.hooksOff() end
         if not ok then
             npcStatus.Text = "เกิด Error หยุดระบบ ดู Console"
             warn("NPC พิเศษ:", err)
         end
-        npc.running = false
-        npcButton.Text = "NPC AUTO: OFF — กดเพื่อเริ่ม"
-        npcButton.BackgroundColor3 = colors.blue
+        -- (v2.61) รอบเก่าที่เพิ่งตื่นหลังกดหยุด-เริ่มใหม่ จะไม่ไปปิดรอบใหม่
+        if npc.token == token then
+            npc.running = false
+            npcButton.Text = "NPC AUTO: OFF — กดเพื่อเริ่ม"
+            npcButton.BackgroundColor3 = colors.blue
+        end
     end)
 end
 
@@ -6100,7 +6181,7 @@ npcMarkNear.Activated:Connect(function()
     local marked = 0
     for _, entry in ipairs(scanNpc()) do
         if not npc.talked[entry.model] and (rootNow.Position - entry.part.Position).Magnitude <= 30 then
-            npc.talked[entry.model] = npcKeyOf(entry.model)
+            npc.talked[entry.model] = npcKeyOf(entry.model, entry)
             marked += 1
         end
     end
@@ -6328,14 +6409,21 @@ local function startShopBuy()
                         local keepPoints = math.max(0, math.floor(tonumber(shopKeepPoints.Text) or 0))
                         local budget = balance and (balance - keepPoints) or math.huge
 
-                        local bestRow = nil
-                        for _, row in ipairs(rows) do
-                            local matches = not wantedSet or wantedSet[normalizeDuck(row.name)]
-                            if matches then
-                                local boughtCount = shop.counts[row.name] or 0
-                                if (maxEach == 0 or boughtCount < maxEach) and row.price <= budget then
-                                    bestRow = row
-                                    break
+                        -- (v2.61) เกลี่ยซื้อทุกอย่าง: เลือกแถวที่ซื้อไปน้อยที่สุดก่อน (เดิมซื้อแต่แถวแรกจนหมดเงิน)
+                        -- ข้ามแถวที่กดแล้ว Point ไม่ลด 3 ครั้ง (ของหมด/ซื้อไม่ได้) ไป 60 วิ; ตั้งเก็บ Point ไว้แต่หาเลข Point ไม่เจอ = ไม่ซื้อ
+                        shop.noEffect = shop.noEffect or {}
+                        shop.skipUntil = shop.skipUntil or {}
+                        local bestRow, bestCount = nil, nil
+                        if not (keepPoints > 0 and not balance) then
+                            for _, row in ipairs(rows) do
+                                local matches = not wantedSet or wantedSet[normalizeDuck(row.name)]
+                                if matches and (shop.skipUntil[row.name] or 0) <= os.clock() then
+                                    local boughtCount = shop.counts[row.name] or 0
+                                    if (maxEach == 0 or boughtCount < maxEach) and row.price <= budget then
+                                        if not bestCount or boughtCount < bestCount then
+                                            bestRow, bestCount = row, boughtCount
+                                        end
+                                    end
                                 end
                             end
                         end
@@ -6348,8 +6436,30 @@ local function startShopBuy()
                             task.wait(1.5)
                         else
                             pressGuiButton(bestRow.button)
-                            shop.bought += 1
-                            shop.counts[bestRow.name] = (shop.counts[bestRow.name] or 0) + 1
+                            local pressWorked = true
+                            -- รอให้เลข Point อัปเดตก่อนตัดสินใจครั้งต่อไป (เดิมกดรัวก่อนเลขเปลี่ยน ทำให้ใช้ Point เกินที่ตั้งเก็บไว้)
+                            if balance then
+                                local waitUntil = os.clock() + 2
+                                local changed = false
+                                while alive() and os.clock() < waitUntil do
+                                    task.wait(0.1)
+                                    if findShopBalance(scope) ~= balance then changed = true break end
+                                end
+                                pressWorked = changed
+                                if not changed then
+                                    shop.noEffect[bestRow.name] = (shop.noEffect[bestRow.name] or 0) + 1
+                                    if shop.noEffect[bestRow.name] >= 3 then
+                                        shop.noEffect[bestRow.name] = 0
+                                        shop.skipUntil[bestRow.name] = os.clock() + 60
+                                    end
+                                else
+                                    shop.noEffect[bestRow.name] = 0
+                                end
+                            end
+                            if pressWorked then
+                                shop.bought += 1
+                                shop.counts[bestRow.name] = (shop.counts[bestRow.name] or 0) + 1
+                            end
                             shopStatus.Text = string.format(
                                 "ซื้อ %s แล้ว %d ครั้ง (ราคา %d/ครั้ง) • รวมซื้อไปแล้ว %d ชิ้น • Point เหลือประมาณ %s",
                                 bestRow.name, shop.counts[bestRow.name], bestRow.price, shop.bought,
@@ -6365,9 +6475,11 @@ local function startShopBuy()
             shopStatus.Text = "เกิด Error หยุดระบบ ดู Console"
             warn("Shop Auto Buy:", err)
         end
-        shop.running = false
-        shopButton.Text = "AUTO BUY: OFF — กดเพื่อเริ่ม"
-        shopButton.BackgroundColor3 = colors.blue
+        if shop.token == token then
+            shop.running = false
+            shopButton.Text = "AUTO BUY: OFF — กดเพื่อเริ่ม"
+            shopButton.BackgroundColor3 = colors.blue
+        end
     end)
 end
 
