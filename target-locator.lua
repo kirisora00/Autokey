@@ -1,4 +1,4 @@
--- Autokey v2.63 (Shop auto-buy fix: read abbreviated Dungeon Point (1.31K), never mark rows "no effect" when the balance is abbreviated, reset skip memory on start, partial name match fallback, status lists rows found when nothing is buyable)
+-- Autokey v2.64 (Shop auto-buy: item names now read from the row container the price button lives in (fallback: nearest title above), so rows are no longer "ไอเทมแถวที่ N")
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -251,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.63",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.64",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.63" or "Anti-AFK: OFF  •  v2.63")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.64" or "Anti-AFK: OFF  •  v2.64")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -6397,23 +6397,59 @@ local function scanShopRows(scope)
             end
         end
     end
+    -- (v2.64) หาชื่อไอเทมจาก "กรอบแถว" ที่ปุ่มราคาอยู่: ไต่ขึ้นทีละชั้นจนเจอกรอบที่มีป้ายข้อความ (และมีปุ่มราคาแค่ปุ่มนี้ปุ่มเดียว)
+    -- เดิมจับคู่ด้วยตำแหน่งบนจอ (ป้ายต้องอยู่แถวเดียวกันห่างไม่เกิน 40px) แต่ร้านนี้ชื่ออยู่ "เหนือ" กล่องปุ่ม เลยจับไม่ได้ ได้แต่ "ไอเทมแถวที่ N"
+    local priceSet = {}
+    for _, entry in ipairs(priceButtons) do priceSet[entry.button] = true end
+    local function isNameLabel(obj, btn)
+        if not obj:IsA("TextLabel") or obj == btn or obj:IsDescendantOf(btn) or not guiVisible(obj) then return false end
+        local text = stripRichText(obj.Text)
+        local n = normalizeDuck(text)
+        return n ~= "" and not n:find("point", 1, true) and text ~= "Shop Dungeon" and not n:match("^%d+$")
+    end
+    local function nameFromContainer(btn)
+        local node = btn.Parent
+        for _ = 1, 5 do
+            if not node or node == scope or node:IsA("ScreenGui") then return nil end
+            local prices, best = 0, nil
+            for _, d in ipairs(node:GetDescendants()) do
+                if priceSet[d] then prices += 1 end
+            end
+            if prices > 1 then return nil end -- ใหญ่เกินไปจนครอบหลายแถวแล้ว
+            for _, d in ipairs(node:GetDescendants()) do
+                if isNameLabel(d, btn) and (not best or d.AbsolutePosition.Y < best.AbsolutePosition.Y) then
+                    best = d
+                end
+            end
+            if best then return stripRichText(best.Text) end
+            node = node.Parent
+        end
+        return nil
+    end
+    local function nameFromLayout(btn)
+        -- สำรอง: ป้ายที่อยู่เหนือ/ระดับเดียวกับปุ่ม ทางซ้ายมือ ใกล้ที่สุดในแนวตั้ง (ไม่เกิน 110px)
+        local by = btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2
+        local bx = btn.AbsolutePosition.X
+        local best, bestGap
+        for _, obj in ipairs(nameCandidates) do
+            if isNameLabel(obj, btn) and obj.AbsolutePosition.X < bx then
+                local oy = obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2
+                local gap = by - oy
+                if gap >= -20 and gap <= 110 and (not bestGap or math.abs(gap) < bestGap) then
+                    best, bestGap = obj, math.abs(gap)
+                end
+            end
+        end
+        return best and stripRichText(best.Text) or nil
+    end
     local rows = {}
     for _, entry in ipairs(priceButtons) do
         local btn = entry.button
         local by = btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2
-        local bx = btn.AbsolutePosition.X
-        local nameLabel, nameX
-        for _, obj in ipairs(nameCandidates) do
-            local oy = obj.AbsolutePosition.Y + obj.AbsoluteSize.Y / 2
-            if math.abs(oy - by) <= 40 and obj.AbsolutePosition.X < bx then
-                if not nameX or obj.AbsolutePosition.X > nameX then
-                    nameLabel, nameX = obj, obj.AbsolutePosition.X
-                end
-            end
-        end
+        local name = nameFromContainer(btn) or nameFromLayout(btn)
         table.insert(rows, {
             button = btn, price = entry.price, y = by,
-            name = nameLabel and stripRichText(nameLabel.Text) or ("ไอเทมแถวที่ " .. (#rows + 1)),
+            name = name or ("ไอเทมแถวที่ " .. (#rows + 1)),
         })
     end
     table.sort(rows, function(a, b) return a.y < b.y end)
