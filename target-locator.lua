@@ -1,4 +1,4 @@
--- Autokey v2.66 (Meditation performance: cache live question, pin only relevant labels, throttle discovery scans)
+-- Autokey v2.67 (Meditation one-shot: progress/timer changes cannot resend a key; verified prompt boundaries only)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -6675,37 +6675,34 @@ local nextScan, queued, step = 0, false, nil
 local cached, nextDiscovery = nil, 0
 local pinned, pinConnections = nil, {}
 local fullScans = 0
+local roundNonce, boundaryPending = 0, false
 local policyState = {epoch = 0, sentEpoch = -1, lastSentAt = -math.huge,
     nextAllowed = 0, pending = false}
 
 local function meditationPlan(state, observation, now)
     if not observation or not observation.active then
-        if state.lastNode then state.epoch = state.epoch + 1 end
-        state.lastNode, state.lastKey = nil, nil
-        state.lastProgress, state.lastRatio = nil, nil
+        -- A missed scan, fade, or timer update is NOT proof of a new round.
+        state.candidateKey, state.candidateNonce, state.candidateAt = nil, nil, nil
         return nil
     end
     if observation.complete then return nil end
 
-    local changed = observation.node ~= state.lastNode or observation.key ~= state.lastKey
-    if observation.progress and state.lastProgress and observation.progress ~= state.lastProgress then
-        changed = true
-    end
-    -- A timer refill/drop identifies a repeated letter in a new round.
-    if observation.ratio and state.lastRatio
-        and math.abs(observation.ratio - state.lastRatio) >= 0.45
-        and now - state.lastSentAt >= 0.18 then
-        changed = true
-    end
-    if changed then state.epoch = state.epoch + 1 end
-    state.lastNode, state.lastKey = observation.node, observation.key
-    state.lastProgress, state.lastRatio = observation.progress, observation.ratio
+    local key = observation.key
+    if key ~= "W" and key ~= "A" and key ~= "S" and key ~= "D" then return nil end
+    local nonce = observation.roundNonce or 0
+    -- Once sent, the same displayed key stays locked regardless of progress/time/node identity.
+    if state.sentKey == key and state.sentNonce == nonce then return nil end
 
+    if state.candidateKey ~= key or state.candidateNonce ~= nonce then
+        state.candidateKey, state.candidateNonce, state.candidateAt = key, nonce, now
+        state.epoch = state.epoch + 1
+    end
+    -- Ignore very brief text changes while the game transitions between questions.
+    if now - state.candidateAt < 0.08 then return nil end
     if observation.blocked or state.pending or now < state.nextAllowed then return nil end
     if state.sentEpoch == state.epoch then return nil end
-    return observation.key, state.epoch
+    return key, state.epoch
 end
-
 
 local function plain(text)
     return tostring(text or ""):gsub("<[^>]->", ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -6975,24 +6972,63 @@ local function clearPins()
     pinned = nil
 end
 
+local function noteQuestionBoundary()
+    if enabled and policyState.sentKey then boundaryPending = true end
+end
+
+local function acceptQuestionBoundary()
+    if not boundaryPending or not cached then return end
+    if visible(cached.node) and visible(cached.titleObject) and visible(cached.hintObject) then
+        local text = plain(cached.node.Text)
+        if text == "W" or text == "A" or text == "S" or text == "D" then
+            roundNonce = roundNonce + 1
+            boundaryPending = false
+        end
+    end
+end
+
 local function pinLiveQuestion()
     if pinned == cached then return end
     clearPins()
     if not cached then return end
     pinned = cached
-    local function watch(object, property)
+    acceptQuestionBoundary()
+    local function watch(object, property, callback)
         if object and object.Parent then
-            table.insert(pinConnections, object:GetPropertyChangedSignal(property):Connect(queueStep))
+            table.insert(pinConnections, object:GetPropertyChangedSignal(property):Connect(callback or queueStep))
         end
     end
-    -- Immediate response to question/progress changes, with no global label listeners.
-    watch(cached.node, "Text")
-    watch(cached.node, "Visible")
+    watch(cached.node, "Text", function()
+        if not cached then return end
+        local text = plain(cached.node.Text)
+        if text ~= "W" and text ~= "A" and text ~= "S" and text ~= "D" then
+            noteQuestionBoundary()
+        else
+            acceptQuestionBoundary()
+        end
+        queueStep()
+    end)
+    -- Only an actual hide/show or blank/new key can rearm the SAME letter.
+    local object = cached.node
+    while object and object ~= playerGui do
+        if object:IsA("GuiObject") then
+            local watched = object
+            watch(watched, "Visible", function()
+                if not watched.Visible then noteQuestionBoundary() else acceptQuestionBoundary() end
+                queueStep()
+            end)
+        elseif object:IsA("ScreenGui") then
+            local watched = object
+            watch(watched, "Enabled", function()
+                if not watched.Enabled then noteQuestionBoundary() else acceptQuestionBoundary() end
+                queueStep()
+            end)
+        end
+        object = object.Parent
+    end
+    -- Counter updates improve status only; they never unlock a key.
     watch(cached.progressObject, "Text")
-    watch(cached.titleObject, "Visible")
-    watch(cached.hintObject, "Visible")
 end
-
 
 local function release()
     local key = held
@@ -7032,6 +7068,7 @@ step = function()
         local observation, description = detect()
         pauseMapScan(observation.active == true)
         pinLiveQuestion()
+        observation.roundNonce = roundNonce
         if not observation.active then
             release()
             meditationPlan(policyState, observation, os.clock())
@@ -7045,7 +7082,7 @@ step = function()
         end
         local key, epoch = meditationPlan(policyState, observation, os.clock())
         if not key then
-            info.Text = description .. "\nส่งปุ่มแล้ว " .. sentCount .. " ครั้ง • รอโจทย์รอบใหม่"
+            info.Text = description .. "\nส่งปุ่มแล้ว " .. sentCount .. " ครั้ง • ล็อกไว้ รอโจทย์ใหม่"
             return
         end
         if sending or held then return end
@@ -7056,6 +7093,7 @@ step = function()
 
         sending, held, policyState.pending = true, key, true
         policyState.sentEpoch = epoch
+        policyState.sentKey, policyState.sentNonce = key, observation.roundNonce
         policyState.lastSentAt = os.clock()
         policyState.nextAllowed = os.clock() + 0.18
         local sent, sendError = pcall(function() sendSkillKey(key, true) end)
@@ -7087,6 +7125,7 @@ toggle.Activated:Connect(function()
     policyState = {epoch = 0, sentEpoch = -1, lastSentAt = -math.huge,
         nextAllowed = os.clock() + 0.12, pending = false}
     sentCount = 0
+    roundNonce, boundaryPending = 0, false
     cached, nextDiscovery = nil, 0
     enabled = true
     toggle.Text = "MEDITATION AUTO: ON — กดเพื่อหยุด"
@@ -7113,6 +7152,7 @@ table.insert(connections, playerGui.DescendantRemoving:Connect(function(object)
     if record and record.connection then record.connection:Disconnect() end
     records[object], bars[object] = nil, nil
     if cached and (object == cached.node or object == cached.titleObject or object == cached.hintObject) then
+        if object == cached.node then noteQuestionBoundary() end
         cached, nextDiscovery = nil, 0
         queueStep()
     end
