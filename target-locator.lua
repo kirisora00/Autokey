@@ -1,4 +1,4 @@
--- Autokey v2.67 (Meditation one-shot: progress/timer changes cannot resend a key; verified prompt boundaries only)
+-- Autokey v2.68 (Meditation: one input per accepted score round; delayed next-question readiness supports repeated letters)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -6676,12 +6676,12 @@ local cached, nextDiscovery = nil, 0
 local pinned, pinConnections = nil, {}
 local fullScans = 0
 local roundNonce, boundaryPending = 0, false
+local sessionNonce, sessionPending = 0, false
 local policyState = {epoch = 0, sentEpoch = -1, lastSentAt = -math.huge,
     nextAllowed = 0, pending = false}
 
 local function meditationPlan(state, observation, now)
     if not observation or not observation.active then
-        -- A missed scan, fade, or timer update is NOT proof of a new round.
         state.candidateKey, state.candidateNonce, state.candidateAt = nil, nil, nil
         return nil
     end
@@ -6689,15 +6689,59 @@ local function meditationPlan(state, observation, now)
 
     local key = observation.key
     if key ~= "W" and key ~= "A" and key ~= "S" and key ~= "D" then return nil end
-    local nonce = observation.roundNonce or 0
-    -- Once sent, the same displayed key stays locked regardless of progress/time/node identity.
-    if state.sentKey == key and state.sentNonce == nonce then return nil end
+    local session = observation.sessionNonce or 0
+    if state.sessionNonce ~= session then
+        state.sessionNonce = session
+        state.progressMode, state.sentProgress, state.maxProgress = false, nil, nil
+        state.roundProgress, state.roundSeenAt = nil, nil
+        state.sentKey, state.sentNonce = nil, nil
+        state.candidateKey, state.candidateNonce, state.candidateAt = nil, nil, nil
+        state.sentEpoch = -1
+    end
 
-    if state.candidateKey ~= key or state.candidateNonce ~= nonce then
-        state.candidateKey, state.candidateNonce, state.candidateAt = key, nonce, now
+    local progress, maximum
+    if type(observation.progress) == "string" then
+        progress, maximum = observation.progress:match("^(%d+)%s*/%s*(%d+)$")
+        progress, maximum = tonumber(progress), tonumber(maximum)
+        if maximum ~= 100 then progress = nil end
+    end
+
+    if progress and progress >= 100 then return nil end
+
+    local token
+    if progress ~= nil then
+        local stamp = tostring(progress) .. "/100"
+        if not state.progressMode then
+            state.progressMode = true
+            -- If the score appeared after an input already went out, do not resend it.
+            if state.sentKey then state.sentProgress = stamp end
+        end
+        if state.maxProgress and progress < state.maxProgress then
+            -- Counter jitter/failure resets require an actual new session, not another key press.
+            return nil
+        end
+        state.maxProgress = math.max(state.maxProgress or progress, progress)
+        if state.roundProgress ~= stamp then
+            state.roundProgress, state.roundSeenAt = stamp, now
+            state.roundDelay = state.sentProgress and 0.45 or 0.08
+        end
+        if state.sentProgress == stamp then return nil end
+        -- Score advances can arrive before the new question text. Never press immediately.
+        if now - state.roundSeenAt < state.roundDelay then return nil end
+        token = "score:" .. stamp
+    elseif state.progressMode then
+        -- A temporarily hidden score must not switch us to the looser letter fallback.
+        return nil
+    else
+        local nonce = observation.roundNonce or 0
+        if state.sentKey == key and state.sentNonce == nonce then return nil end
+        token = "prompt:" .. tostring(nonce)
+    end
+
+    if state.candidateKey ~= key or state.candidateNonce ~= token then
+        state.candidateKey, state.candidateNonce, state.candidateAt = key, token, now
         state.epoch = state.epoch + 1
     end
-    -- Ignore very brief text changes while the game transitions between questions.
     if now - state.candidateAt < 0.08 then return nil end
     if observation.blocked or state.pending or now < state.nextAllowed then return nil end
     if state.sentEpoch == state.epoch then return nil end
@@ -6896,7 +6940,9 @@ local function detect(force)
     end
     if cached and (not cached.node.Parent
         or cached.width ~= viewport.X or cached.height ~= viewport.Y
-        or not cached.titleObject.Parent or not cached.hintObject.Parent) then
+        or not cached.titleObject.Parent or not cached.hintObject.Parent
+        or (cached.progressObject and not cached.progressObject.Parent)
+        or (cached.timerObject and not cached.timerObject.Parent)) then
         cached, nextDiscovery = nil, 0
     end
     if force then cached, nextDiscovery = nil, 0 end
@@ -6972,8 +7018,11 @@ local function clearPins()
     pinned = nil
 end
 
-local function noteQuestionBoundary()
-    if enabled and policyState.sentKey then boundaryPending = true end
+local function noteQuestionBoundary(sessionBoundary)
+    if enabled and policyState.sentKey then
+        boundaryPending = true
+        if sessionBoundary then sessionPending = true end
+    end
 end
 
 local function acceptQuestionBoundary()
@@ -6982,7 +7031,8 @@ local function acceptQuestionBoundary()
         local text = plain(cached.node.Text)
         if text == "W" or text == "A" or text == "S" or text == "D" then
             roundNonce = roundNonce + 1
-            boundaryPending = false
+            if sessionPending then sessionNonce = sessionNonce + 1 end
+            boundaryPending, sessionPending = false, false
         end
     end
 end
@@ -7013,20 +7063,22 @@ local function pinLiveQuestion()
     while object and object ~= playerGui do
         if object:IsA("GuiObject") then
             local watched = object
+            local sessionContainer = cached.titleObject:IsDescendantOf(watched)
+                and cached.hintObject:IsDescendantOf(watched)
             watch(watched, "Visible", function()
-                if not watched.Visible then noteQuestionBoundary() else acceptQuestionBoundary() end
+                if not watched.Visible then noteQuestionBoundary(sessionContainer) else acceptQuestionBoundary() end
                 queueStep()
             end)
         elseif object:IsA("ScreenGui") then
             local watched = object
             watch(watched, "Enabled", function()
-                if not watched.Enabled then noteQuestionBoundary() else acceptQuestionBoundary() end
+                if not watched.Enabled then noteQuestionBoundary(true) else acceptQuestionBoundary() end
                 queueStep()
             end)
         end
         object = object.Parent
     end
-    -- Counter updates improve status only; they never unlock a key.
+    -- Counter advances identify accepted rounds; the policy waits for the next text to settle.
     watch(cached.progressObject, "Text")
 end
 
@@ -7069,6 +7121,7 @@ step = function()
         pauseMapScan(observation.active == true)
         pinLiveQuestion()
         observation.roundNonce = roundNonce
+        observation.sessionNonce = sessionNonce
         if not observation.active then
             release()
             meditationPlan(policyState, observation, os.clock())
@@ -7082,7 +7135,7 @@ step = function()
         end
         local key, epoch = meditationPlan(policyState, observation, os.clock())
         if not key then
-            info.Text = description .. "\nส่งปุ่มแล้ว " .. sentCount .. " ครั้ง • ล็อกไว้ รอโจทย์ใหม่"
+            info.Text = description .. "\nส่งปุ่มแล้ว " .. sentCount .. " ครั้ง • รอคะแนนและโจทย์รอบถัดไป"
             return
         end
         if sending or held then return end
@@ -7094,6 +7147,7 @@ step = function()
         sending, held, policyState.pending = true, key, true
         policyState.sentEpoch = epoch
         policyState.sentKey, policyState.sentNonce = key, observation.roundNonce
+        if policyState.progressMode then policyState.sentProgress = policyState.roundProgress end
         policyState.lastSentAt = os.clock()
         policyState.nextAllowed = os.clock() + 0.18
         local sent, sendError = pcall(function() sendSkillKey(key, true) end)
@@ -7126,6 +7180,7 @@ toggle.Activated:Connect(function()
         nextAllowed = os.clock() + 0.12, pending = false}
     sentCount = 0
     roundNonce, boundaryPending = 0, false
+    sessionNonce, sessionPending = 0, false
     cached, nextDiscovery = nil, 0
     enabled = true
     toggle.Text = "MEDITATION AUTO: ON — กดเพื่อหยุด"
@@ -7152,7 +7207,15 @@ table.insert(connections, playerGui.DescendantRemoving:Connect(function(object)
     if record and record.connection then record.connection:Disconnect() end
     records[object], bars[object] = nil, nil
     if cached and (object == cached.node or object == cached.titleObject or object == cached.hintObject) then
-        if object == cached.node then noteQuestionBoundary() end
+        if object == cached.node then
+            noteQuestionBoundary()
+        elseif object == cached.titleObject or object == cached.hintObject then
+            noteQuestionBoundary(true)
+        end
+        cached, nextDiscovery = nil, 0
+        queueStep()
+    elseif cached and (object == cached.progressObject or object == cached.timerObject) then
+        -- Rebind recreated score/timer labels without treating it as another answered round.
         cached, nextDiscovery = nil, 0
         queueStep()
     end
