@@ -1,4 +1,4 @@
--- Autokey v2.64 (Shop auto-buy: item names now read from the row container the price button lives in (fallback: nearest title above), so rows are no longer "ไอเทมแถวที่ N")
+-- Autokey v2.65 (Meditation AUTO: answers visible W/A/S/D questions with per-round deduplication and cleanup)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -774,6 +774,10 @@ local function showPage(page)
     if extraTabs.npcPage then
         extraTabs.npcPage.Visible = page == "npc"
         extraTabs.npcTab.BackgroundColor3 = page == "npc" and colors.active or colors.tab
+    end
+    if extraTabs.meditationPage then
+        extraTabs.meditationPage.Visible = page == "meditation"
+        extraTabs.meditationTab.BackgroundColor3 = page == "meditation" and colors.active or colors.tab
     end
     if extraTabs.shopPage then
         extraTabs.shopPage.Visible = page == "shop"
@@ -6617,6 +6621,383 @@ end)
 shopTab.Activated:Connect(function() showPage("shop") end)
 end)()
 
+
+
+-- ===== Meditation: read the live W/A/S/D question and answer once per round =====
+;(function()
+local tab = create("TextButton", {
+    LayoutOrder = 25, Size = UDim2.fromOffset(145, 34),
+    Text = "Meditation / สมาธิ", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 14,
+    BackgroundColor3 = colors.tab, BorderSizePixel = 0,
+}, navList)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, tab)
+local page = makePage()
+page.Visible = false
+extraTabs.meditationTab, extraTabs.meditationPage = tab, page
+
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
+    Text = "Meditation / กดตามโจทย์", TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold, TextSize = 21,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, page)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 37), Size = UDim2.new(1, 0, 0, 64),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+    Text = "เปิดหน้า MEDITATION ของเกม แล้วเปิด AUTO\nอ่าน W/A/S/D ที่เป็นโจทย์กลางจอ ไม่อ่านแป้นด้านล่าง\nยุบหรือซ่อนเมนู Autokey แล้วระบบยังทำงาน",
+}, page)
+local toggle = create("TextButton", {
+    Position = UDim2.fromOffset(0, 113), Size = UDim2.new(1, 0, 0, 43),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 16, Text = "MEDITATION AUTO: OFF — กดเพื่อเริ่ม",
+}, page)
+local scan = create("TextButton", {
+    Position = UDim2.fromOffset(0, 165), Size = UDim2.new(1, 0, 0, 36),
+    BackgroundColor3 = colors.active, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
+    Text = "ตรวจโจทย์ตอนนี้",
+}, page)
+local info = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 214), Size = UDim2.new(1, 0, 0, 151),
+    BackgroundTransparency = 1, TextColor3 = colors.muted,
+    TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "AUTO เริ่มต้นปิดอยู่\nเปิดหน้าฝึกสมาธิแล้วกดเริ่มได้เลย\nถ้าอ่านโจทย์ไม่ได้ กดตรวจโจทย์ตอนนี้แล้วส่งสถานะมา",
+}, page)
+
+local enabled, focused, destroyed = false, true, false
+local records, bars, connections = {}, {}, {}
+local sending, held, sentCount = false, nil, 0
+local nextScan, queued, step = 0, false, nil
+local policyState = {epoch = 0, sentEpoch = -1, lastSentAt = -math.huge,
+    nextAllowed = 0, pending = false}
+
+local function meditationPlan(state, observation, now)
+    if not observation or not observation.active then
+        if state.lastNode then state.epoch = state.epoch + 1 end
+        state.lastNode, state.lastKey = nil, nil
+        state.lastProgress, state.lastRatio = nil, nil
+        return nil
+    end
+    if observation.complete then return nil end
+
+    local changed = observation.node ~= state.lastNode or observation.key ~= state.lastKey
+    if observation.progress and state.lastProgress and observation.progress ~= state.lastProgress then
+        changed = true
+    end
+    -- A timer refill/drop identifies a repeated letter in a new round.
+    if observation.ratio and state.lastRatio
+        and math.abs(observation.ratio - state.lastRatio) >= 0.45
+        and now - state.lastSentAt >= 0.18 then
+        changed = true
+    end
+    if changed then state.epoch = state.epoch + 1 end
+    state.lastNode, state.lastKey = observation.node, observation.key
+    state.lastProgress, state.lastRatio = observation.progress, observation.ratio
+
+    if observation.blocked or state.pending or now < state.nextAllowed then return nil end
+    if state.sentEpoch == state.epoch then return nil end
+    return observation.key, state.epoch
+end
+
+
+local function plain(text)
+    return tostring(text or ""):gsub("<[^>]->", ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function screenOf(object)
+    local parent = object
+    while parent and parent ~= playerGui do
+        if parent:IsA("ScreenGui") then return parent end
+        parent = parent.Parent
+    end
+end
+
+local function visible(object)
+    if not object or not object:IsDescendantOf(playerGui) or object:IsDescendantOf(gui) then return false end
+    if object.AbsoluteSize.X <= 0 or object.AbsoluteSize.Y <= 0 then return false end
+    if (object:IsA("TextLabel") or object:IsA("TextButton")) and object.TextTransparency >= 0.95 then return false end
+    local point = object.AbsolutePosition + object.AbsoluteSize * 0.5
+    local parent = object
+    while parent and parent ~= playerGui do
+        if parent:IsA("GuiObject") then
+            if not parent.Visible then return false end
+            if parent:IsA("CanvasGroup") and parent.GroupTransparency >= 0.95 then return false end
+            if parent.ClipsDescendants then
+                local p, size = parent.AbsolutePosition, parent.AbsoluteSize
+                if point.X < p.X or point.Y < p.Y or point.X > p.X + size.X or point.Y > p.Y + size.Y then
+                    return false
+                end
+            end
+        elseif parent:IsA("ScreenGui") and not parent.Enabled then
+            return false
+        end
+        parent = parent.Parent
+    end
+    return parent == playerGui
+end
+
+local function queueStep()
+    if not enabled or destroyed or queued then return end
+    queued = true
+    task.defer(function()
+        queued = false
+        if enabled and not destroyed and step then step() end
+    end)
+end
+
+local function classify(object, record)
+    local text = plain(object.Text)
+    record.text = text
+    record.key = (text == "W" or text == "A" or text == "S" or text == "D") and text or nil
+    local lowered = string.lower(text)
+    record.title = lowered:match("^meditation%s*$") ~= nil
+        or lowered:match("^meditation%s*%d") ~= nil
+    record.hint = lowered:find("follow the key", 1, true) ~= nil
+    record.progress, record.maximum = text:match("^(%d+)%s*/%s*(%d+)$")
+    record.progress, record.maximum = tonumber(record.progress), tonumber(record.maximum)
+end
+
+local function track(object)
+    if object:IsDescendantOf(gui) then return end
+    if object:IsA("TextLabel") or object:IsA("TextButton") then
+        if records[object] then return end
+        local record = {}
+        records[object] = record
+        classify(object, record)
+        record.connection = object:GetPropertyChangedSignal("Text"):Connect(function()
+            classify(object, record)
+            queueStep()
+        end)
+    elseif object:IsA("Frame") or object:IsA("ImageLabel") then
+        bars[object] = true
+    end
+end
+
+local function detect()
+    local camera = workspace.CurrentCamera
+    if not camera then return {active = false}, "รอกล้องเกม..." end
+    local viewport = camera.ViewportSize
+    if viewport.X <= 0 or viewport.Y <= 0 then return {active = false}, "รอขนาดหน้าจอ..." end
+    local titleLabel, hintLabel
+    for object, record in pairs(records) do
+        if (record.title or record.hint) and visible(object) then
+            if record.title then titleLabel = object end
+            if record.hint then hintLabel = object end
+        end
+    end
+    if not titleLabel or not hintLabel then
+        return {active = false}, "รอหน้าฝึก MEDITATION และข้อความ follow the key..."
+    end
+
+    local screen = screenOf(hintLabel)
+    local hintY = hintLabel.AbsolutePosition.Y + hintLabel.AbsoluteSize.Y * 0.5
+    local candidate, score, key, count = nil, -math.huge, nil, 0
+    for object, record in pairs(records) do
+        if record.key and screenOf(object) == screen and visible(object) then
+            local size = object.AbsoluteSize
+            local center = object.AbsolutePosition + size * 0.5
+            local x, y = center.X / viewport.X, center.Y / viewport.Y
+            -- The question sits above the W/A/S/D pad shown in the reference.
+            -- Reject lower control-pad labels even if they are visible.
+            if x >= 0.30 and x <= 0.70 and y >= 0.28 and y <= 0.64
+                and center.Y >= hintY + 8 and size.X >= 18 and size.Y >= 18 then
+                count = count + 1
+                local rank = size.Y + math.min(object.TextBounds.Y, 160)
+                    - math.abs(x - 0.5) * 180 - math.abs(y - 0.47) * 180
+                if rank > score then candidate, score, key = object, rank, record.key end
+            end
+        end
+    end
+    if not candidate then
+        return {active = false}, "เห็นหน้า MEDITATION แต่ยังไม่พบโจทย์ W/A/S/D กลางจอ"
+    end
+
+    local progress, maximum, progressDistance
+    local titlePoint = titleLabel.AbsolutePosition + titleLabel.AbsoluteSize * 0.5
+    for object, record in pairs(records) do
+        if record.progress and record.maximum and record.maximum == 100
+            and screenOf(object) == screenOf(titleLabel) and visible(object) then
+            local point = object.AbsolutePosition + object.AbsoluteSize * 0.5
+            if math.abs(point.Y - titlePoint.Y) <= 75 and math.abs(point.X - titlePoint.X) <= viewport.X * 0.5 then
+                local distance = (point - titlePoint).Magnitude
+                if not progressDistance or distance < progressDistance then
+                    progressDistance, progress, maximum = distance, record.progress, record.maximum
+                end
+            end
+        end
+    end
+
+    local ratio, ratioScore
+    local point = candidate.AbsolutePosition + candidate.AbsoluteSize * 0.5
+    for object in pairs(bars) do
+        local parent = object.Parent
+        if parent and parent:IsA("GuiObject") and screenOf(object) == screen
+            and object.Visible and visible(parent) then
+            local size, parentSize = object.AbsoluteSize, parent.AbsoluteSize
+            local center = parent.AbsolutePosition + parentSize * 0.5
+            if size.Y >= 3 and size.Y <= 24 and parentSize.Y <= 28
+                and parentSize.X >= 70 and parentSize.X <= viewport.X * 0.35
+                and parentSize.X >= parentSize.Y * 4
+                and math.abs(center.X - point.X) <= viewport.X * 0.13
+                and center.Y > point.Y + 18 and center.Y < point.Y + viewport.Y * 0.18
+                and size.X <= parentSize.X + 1 then
+                local rank = math.abs(center.X - point.X) + math.abs(center.Y - point.Y - 85)
+                local color = object:IsA("ImageLabel") and object.ImageColor3 or object.BackgroundColor3
+                if color and color.B > color.R + 0.10 and color.G > color.R + 0.10 then
+                    rank = rank - 40 -- Prefer the blue timer fill over its static border.
+                elseif size.X < parentSize.X - 1 then
+                    rank = rank - 15
+                end
+                if not ratioScore or rank < ratioScore then
+                    ratioScore, ratio = rank, math.clamp(size.X / parentSize.X, 0, 1)
+                end
+            end
+        end
+    end
+
+    return {
+        active = true, node = candidate, key = key,
+        progress = progress and (tostring(progress) .. "/" .. tostring(maximum)) or nil,
+        complete = progress ~= nil and progress >= maximum,
+        ratio = ratio,
+    }, string.format("โจทย์: %s • ตัวเลือกกลางจอ %d จุด%s\n%s",
+        key, count, progress and (" • " .. progress .. "/" .. maximum) or "", candidate:GetFullName())
+end
+
+local function release()
+    local key = held
+    if key then
+        local ok, err = pcall(function() sendSkillKey(key, false) end)
+        if ok then held = nil else warn("Meditation key release:", err) end
+    end
+    if not held then policyState.pending = false end
+end
+
+local function stop(message)
+    enabled = false
+    release()
+    toggle.Text = "MEDITATION AUTO: OFF — กดเพื่อเริ่ม"
+    toggle.BackgroundColor3 = colors.blue
+    if message then info.Text = message end
+end
+
+local function conflict()
+    return auto or flight ~= nil or duck.enabled or raid.running or raid.fighting
+        or dungeon.running or raid.miniBossRunning or raid.npcRunning or gacha.running
+end
+
+step = function()
+    if not running or not enabled or destroyed then return end
+    local ok, err = pcall(function()
+        if not focused or UserInputService:GetFocusedTextBox() or conflict() then
+            release()
+            info.Text = conflict()
+                and "พัก Meditation: ปิดระบบวาร์ป/บิน/ตีบอส/สุ่มก่อน เพื่อให้กดโจทย์ได้ตรง"
+                or "พักกดระหว่างพิมพ์ข้อความหรือสลับออกจากเกม"
+            return
+        end
+        local observation, description = detect()
+        if not observation.active then
+            release()
+            meditationPlan(policyState, observation, os.clock())
+            info.Text = description .. "\nส่งปุ่มแล้ว " .. sentCount .. " ครั้ง"
+            return
+        end
+        if observation.complete then
+            release()
+            info.Text = "ครบ 100/100 แล้ว พักกดและรอหน้าฝึกครั้งใหม่"
+            return
+        end
+        local key, epoch = meditationPlan(policyState, observation, os.clock())
+        if not key then
+            info.Text = description .. "\nส่งปุ่มแล้ว " .. sentCount .. " ครั้ง • รอโจทย์รอบใหม่"
+            return
+        end
+        if sending or held then return end
+        if not initializeSkillInput() then
+            stop("ตัวรันไม่รองรับการจำลองปุ่ม W/A/S/D")
+            return
+        end
+
+        sending, held, policyState.pending = true, key, true
+        policyState.sentEpoch = epoch
+        policyState.lastSentAt = os.clock()
+        policyState.nextAllowed = os.clock() + 0.18
+        local sent, sendError = pcall(function() sendSkillKey(key, true) end)
+        if not sent then
+            sending = false
+            stop("ส่งปุ่มไม่สำเร็จ ปิดแชต/เมนู Roblox แล้วลองใหม่\n" .. tostring(sendError))
+            return
+        end
+        sentCount = sentCount + 1
+        info.Text = description .. "\nส่ง " .. key .. " แล้ว • รวม " .. sentCount .. " ครั้ง"
+        task.delay(0.06, function()
+            release()
+            sending = false
+            if held and not destroyed then stop("ปล่อยปุ่มไม่สำเร็จ ปิดแชต/เมนู Roblox แล้วลองใหม่") end
+            queueStep()
+        end)
+    end)
+    if not ok then
+        sending = false
+        stop("หยุด Meditation เพราะเกิด Error ดู Console\n" .. tostring(err))
+        warn("Meditation Auto:", err)
+    end
+end
+
+tab.Activated:Connect(function() showPage("meditation") end)
+toggle.Activated:Connect(function()
+    if enabled then stop("หยุด Meditation แล้ว • ส่งปุ่มไป " .. sentCount .. " ครั้ง") return end
+    if held then release() if held then info.Text = "ยังปล่อยปุ่มเก่าไม่ได้ ปิดแชต/เมนู Roblox ก่อน" return end end
+    policyState = {epoch = 0, sentEpoch = -1, lastSentAt = -math.huge,
+        nextAllowed = os.clock() + 0.12, pending = false}
+    sentCount = 0
+    enabled = true
+    toggle.Text = "MEDITATION AUTO: ON — กดเพื่อหยุด"
+    toggle.BackgroundColor3 = colors.green
+    queueStep()
+end)
+scan.Activated:Connect(function()
+    local ok, observation, description = pcall(detect)
+    info.Text = ok and description or ("ตรวจไม่สำเร็จ: " .. tostring(observation))
+end)
+
+table.insert(connections, playerGui.DescendantAdded:Connect(function(object)
+    track(object)
+    queueStep()
+end))
+table.insert(connections, playerGui.DescendantRemoving:Connect(function(object)
+    local record = records[object]
+    if record and record.connection then record.connection:Disconnect() end
+    records[object], bars[object] = nil, nil
+end))
+for _, object in ipairs(playerGui:GetDescendants()) do track(object) end
+
+table.insert(connections, RunService.Heartbeat:Connect(function()
+    if held and (not focused or not enabled) then release() end
+    if enabled and os.clock() >= nextScan then
+        nextScan = os.clock() + 0.04
+        step()
+    end
+end))
+table.insert(connections, UserInputService.TextBoxFocused:Connect(function() release() end))
+table.insert(connections, UserInputService.WindowFocusReleased:Connect(function() focused = false release() end))
+table.insert(connections, UserInputService.WindowFocused:Connect(function() focused = true queueStep() end))
+gui.Destroying:Connect(function()
+    enabled, destroyed = false, true
+    release()
+    for _, connection in ipairs(connections) do connection:Disconnect() end
+    for _, record in pairs(records) do
+        if record.connection then record.connection:Disconnect() end
+    end
+    table.clear(records)
+    table.clear(bars)
+end)
+end)()
 
 local function autoStep(entries)
     if not auto then return end
