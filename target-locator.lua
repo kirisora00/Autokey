@@ -1,4 +1,4 @@
--- Autokey v2.65 (Meditation AUTO: answers visible W/A/S/D questions with per-round deduplication and cleanup)
+-- Autokey v2.66 (Meditation performance: cache live question, pin only relevant labels, throttle discovery scans)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -6672,6 +6672,9 @@ local enabled, focused, destroyed = false, true, false
 local records, bars, connections = {}, {}, {}
 local sending, held, sentCount = false, nil, 0
 local nextScan, queued, step = 0, false, nil
+local cached, nextDiscovery = nil, 0
+local pinned, pinConnections = nil, {}
+local fullScans = 0
 local policyState = {epoch = 0, sentEpoch = -1, lastSentAt = -math.huge,
     nextAllowed = 0, pending = false}
 
@@ -6740,6 +6743,25 @@ local function visible(object)
     return parent == playerGui
 end
 
+local mapMarkersBeforePause = {}
+local function pauseMapScan(value)
+    if extraTabs.meditationPauseMap == value then return end
+    extraTabs.meditationPauseMap = value
+    if value then
+        for _, marker in pairs(markers) do
+            if marker.gui.Parent then
+                mapMarkersBeforePause[marker.gui] = marker.gui.Enabled
+                marker.gui.Enabled = false
+            end
+        end
+    else
+        for markerGui, wasEnabled in pairs(mapMarkersBeforePause) do
+            if markerGui.Parent then markerGui.Enabled = wasEnabled end
+        end
+        table.clear(mapMarkersBeforePause)
+    end
+end
+
 local function queueStep()
     if not enabled or destroyed or queued then return end
     queued = true
@@ -6764,26 +6786,22 @@ end
 local function track(object)
     if object:IsDescendantOf(gui) then return end
     if object:IsA("TextLabel") or object:IsA("TextButton") then
-        if records[object] then return end
-        local record = {}
-        records[object] = record
-        classify(object, record)
-        record.connection = object:GetPropertyChangedSignal("Text"):Connect(function()
-            classify(object, record)
-            queueStep()
-        end)
+        -- Keep an index, not a TextChanged subscription on every game label.
+        if not records[object] then records[object] = {} end
     elseif object:IsA("Frame") or object:IsA("ImageLabel") then
         bars[object] = true
     end
 end
 
-local function detect()
+local function discover()
+    fullScans = fullScans + 1
     local camera = workspace.CurrentCamera
     if not camera then return {active = false}, "รอกล้องเกม..." end
     local viewport = camera.ViewportSize
     if viewport.X <= 0 or viewport.Y <= 0 then return {active = false}, "รอขนาดหน้าจอ..." end
     local titleLabel, hintLabel
     for object, record in pairs(records) do
+        classify(object, record)
         if (record.title or record.hint) and visible(object) then
             if record.title then titleLabel = object end
             if record.hint then hintLabel = object end
@@ -6816,7 +6834,7 @@ local function detect()
         return {active = false}, "เห็นหน้า MEDITATION แต่ยังไม่พบโจทย์ W/A/S/D กลางจอ"
     end
 
-    local progress, maximum, progressDistance
+    local progress, maximum, progressDistance, progressObject
     local titlePoint = titleLabel.AbsolutePosition + titleLabel.AbsoluteSize * 0.5
     for object, record in pairs(records) do
         if record.progress and record.maximum and record.maximum == 100
@@ -6825,18 +6843,17 @@ local function detect()
             if math.abs(point.Y - titlePoint.Y) <= 75 and math.abs(point.X - titlePoint.X) <= viewport.X * 0.5 then
                 local distance = (point - titlePoint).Magnitude
                 if not progressDistance or distance < progressDistance then
-                    progressDistance, progress, maximum = distance, record.progress, record.maximum
+                    progressDistance, progress, maximum, progressObject = distance, record.progress, record.maximum, object
                 end
             end
         end
     end
 
-    local ratio, ratioScore
+    local ratio, ratioScore, timerObject
     local point = candidate.AbsolutePosition + candidate.AbsoluteSize * 0.5
     for object in pairs(bars) do
         local parent = object.Parent
-        if parent and parent:IsA("GuiObject") and screenOf(object) == screen
-            and object.Visible and visible(parent) then
+        if parent and parent:IsA("GuiObject") and object.Visible then
             local size, parentSize = object.AbsoluteSize, parent.AbsoluteSize
             local center = parent.AbsolutePosition + parentSize * 0.5
             if size.Y >= 3 and size.Y <= 24 and parentSize.Y <= 28
@@ -6844,7 +6861,8 @@ local function detect()
                 and parentSize.X >= parentSize.Y * 4
                 and math.abs(center.X - point.X) <= viewport.X * 0.13
                 and center.Y > point.Y + 18 and center.Y < point.Y + viewport.Y * 0.18
-                and size.X <= parentSize.X + 1 then
+                and size.X <= parentSize.X + 1
+                and screenOf(object) == screen and visible(parent) then
                 local rank = math.abs(center.X - point.X) + math.abs(center.Y - point.Y - 85)
                 local color = object:IsA("ImageLabel") and object.ImageColor3 or object.BackgroundColor3
                 if color and color.B > color.R + 0.10 and color.G > color.R + 0.10 then
@@ -6853,7 +6871,7 @@ local function detect()
                     rank = rank - 15
                 end
                 if not ratioScore or rank < ratioScore then
-                    ratioScore, ratio = rank, math.clamp(size.X / parentSize.X, 0, 1)
+                    ratioScore, ratio, timerObject = rank, math.clamp(size.X / parentSize.X, 0, 1), object
                 end
             end
         end
@@ -6861,12 +6879,120 @@ local function detect()
 
     return {
         active = true, node = candidate, key = key,
+        titleObject = titleLabel, hintObject = hintLabel, progressObject = progressObject, timerObject = timerObject,
+        count = count,
         progress = progress and (tostring(progress) .. "/" .. tostring(maximum)) or nil,
         complete = progress ~= nil and progress >= maximum,
         ratio = ratio,
     }, string.format("โจทย์: %s • ตัวเลือกกลางจอ %d จุด%s\n%s",
         key, count, progress and (" • " .. progress .. "/" .. maximum) or "", candidate:GetFullName())
 end
+
+
+-- Most ticks read only the live question/progress/fill. Full scans are discovery-only.
+local function detect(force)
+    local now = os.clock()
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize
+    if not viewport or viewport.X <= 0 or viewport.Y <= 0 then
+        return {active = false}, "รอกล้องเกม..."
+    end
+    if cached and (not cached.node.Parent
+        or cached.width ~= viewport.X or cached.height ~= viewport.Y
+        or not cached.titleObject.Parent or not cached.hintObject.Parent) then
+        cached, nextDiscovery = nil, 0
+    end
+    if force then cached, nextDiscovery = nil, 0 end
+
+    if not cached then
+        if now < nextDiscovery then return {active = false}, "รอหน้าฝึก MEDITATION..." end
+        nextDiscovery = now + 0.75
+        local observation, description = discover()
+        if not observation.active then return observation, description end
+        cached = observation
+        cached.width, cached.height = viewport.X, viewport.Y
+        cached.path = observation.node:GetFullName()
+        cached.descriptionStamp = nil
+    end
+
+    local live = cached
+    if not visible(live.titleObject) or not visible(live.hintObject) then
+        -- The minigame was closed; do not rediscover the whole UI every tick.
+        cached = nil
+        nextDiscovery = now + 0.75
+        return {active = false}, "รอเปิดหน้าฝึก MEDITATION..."
+    end
+    if not visible(live.node) then
+        live.hiddenSince = live.hiddenSince or now
+        if now - live.hiddenSince >= 0.20 then
+            cached = nil
+            nextDiscovery = math.min(nextDiscovery, now)
+        end
+        return {active = false}, "รอโจทย์รอบใหม่..."
+    end
+    live.hiddenSince = nil
+
+    local key = plain(live.node.Text)
+    if key ~= "W" and key ~= "A" and key ~= "S" and key ~= "D" then
+        return {active = false}, "รอโจทย์ W/A/S/D..."
+    end
+    local point = live.node.AbsolutePosition + live.node.AbsoluteSize * 0.5
+    local hintY = live.hintObject.AbsolutePosition.Y + live.hintObject.AbsoluteSize.Y * 0.5
+    local x, y = point.X / viewport.X, point.Y / viewport.Y
+    if x < 0.30 or x > 0.70 or y < 0.28 or y > 0.64 or point.Y < hintY + 8 then
+        cached = nil
+        return {active = false}, "รอค้นหาโจทย์กลางจอใหม่..."
+    end
+
+    local progress, maximum
+    if live.progressObject and live.progressObject.Parent and visible(live.progressObject) then
+        progress, maximum = plain(live.progressObject.Text):match("^(%d+)%s*/%s*(%d+)$")
+        progress, maximum = tonumber(progress), tonumber(maximum)
+        if maximum ~= 100 then progress, maximum = nil, nil end
+    end
+    local ratio
+    local bar = live.timerObject
+    if bar and bar.Parent and bar.Parent:IsA("GuiObject") and bar.Visible and visible(bar.Parent) then
+        local width = bar.Parent.AbsoluteSize.X
+        if width > 0 then ratio = math.clamp(bar.AbsoluteSize.X / width, 0, 1) end
+    end
+    local stamp = key .. "|" .. (progress and tostring(progress) or "?")
+    if live.descriptionStamp ~= stamp then
+        live.descriptionStamp = stamp
+        live.description = string.format("โจทย์: %s%s\n%s",
+            key, progress and (" • " .. progress .. "/" .. maximum) or "", live.path)
+    end
+    return {
+        active = true, node = live.node, key = key, ratio = ratio,
+        progress = progress and (tostring(progress) .. "/" .. tostring(maximum)) or nil,
+        complete = progress ~= nil and progress >= maximum,
+    }, live.description
+end
+
+local function clearPins()
+    for _, connection in ipairs(pinConnections) do connection:Disconnect() end
+    table.clear(pinConnections)
+    pinned = nil
+end
+
+local function pinLiveQuestion()
+    if pinned == cached then return end
+    clearPins()
+    if not cached then return end
+    pinned = cached
+    local function watch(object, property)
+        if object and object.Parent then
+            table.insert(pinConnections, object:GetPropertyChangedSignal(property):Connect(queueStep))
+        end
+    end
+    -- Immediate response to question/progress changes, with no global label listeners.
+    watch(cached.node, "Text")
+    watch(cached.node, "Visible")
+    watch(cached.progressObject, "Text")
+    watch(cached.titleObject, "Visible")
+    watch(cached.hintObject, "Visible")
+end
+
 
 local function release()
     local key = held
@@ -6879,6 +7005,8 @@ end
 
 local function stop(message)
     enabled = false
+    pauseMapScan(false)
+    clearPins()
     release()
     toggle.Text = "MEDITATION AUTO: OFF — กดเพื่อเริ่ม"
     toggle.BackgroundColor3 = colors.blue
@@ -6894,6 +7022,7 @@ step = function()
     if not running or not enabled or destroyed then return end
     local ok, err = pcall(function()
         if not focused or UserInputService:GetFocusedTextBox() or conflict() then
+            pauseMapScan(false)
             release()
             info.Text = conflict()
                 and "พัก Meditation: ปิดระบบวาร์ป/บิน/ตีบอส/สุ่มก่อน เพื่อให้กดโจทย์ได้ตรง"
@@ -6901,6 +7030,8 @@ step = function()
             return
         end
         local observation, description = detect()
+        pauseMapScan(observation.active == true)
+        pinLiveQuestion()
         if not observation.active then
             release()
             meditationPlan(policyState, observation, os.clock())
@@ -6956,31 +7087,42 @@ toggle.Activated:Connect(function()
     policyState = {epoch = 0, sentEpoch = -1, lastSentAt = -math.huge,
         nextAllowed = os.clock() + 0.12, pending = false}
     sentCount = 0
+    cached, nextDiscovery = nil, 0
     enabled = true
     toggle.Text = "MEDITATION AUTO: ON — กดเพื่อหยุด"
     toggle.BackgroundColor3 = colors.green
     queueStep()
 end)
 scan.Activated:Connect(function()
-    local ok, observation, description = pcall(detect)
+    local ok, observation, description = pcall(detect, true)
     info.Text = ok and description or ("ตรวจไม่สำเร็จ: " .. tostring(observation))
 end)
 
 table.insert(connections, playerGui.DescendantAdded:Connect(function(object)
     track(object)
-    queueStep()
+    if enabled and (object:IsA("TextLabel") or object:IsA("TextButton")) then
+        local text = plain(object.Text)
+        if text == "W" or text == "A" or text == "S" or text == "D" then
+            if not cached then nextDiscovery = 0 end
+            queueStep()
+        end
+    end
 end))
 table.insert(connections, playerGui.DescendantRemoving:Connect(function(object)
     local record = records[object]
     if record and record.connection then record.connection:Disconnect() end
     records[object], bars[object] = nil, nil
+    if cached and (object == cached.node or object == cached.titleObject or object == cached.hintObject) then
+        cached, nextDiscovery = nil, 0
+        queueStep()
+    end
 end))
 for _, object in ipairs(playerGui:GetDescendants()) do track(object) end
 
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if held and (not focused or not enabled) then release() end
     if enabled and os.clock() >= nextScan then
-        nextScan = os.clock() + 0.04
+        nextScan = os.clock() + 0.08
         step()
     end
 end))
@@ -6989,6 +7131,8 @@ table.insert(connections, UserInputService.WindowFocusReleased:Connect(function(
 table.insert(connections, UserInputService.WindowFocused:Connect(function() focused = true queueStep() end))
 gui.Destroying:Connect(function()
     enabled, destroyed = false, true
+    pauseMapScan(false)
+    clearPins()
     release()
     for _, connection in ipairs(connections) do connection:Disconnect() end
     for _, record in pairs(records) do
@@ -7107,6 +7251,7 @@ task.spawn(function()
 end)
 
 local function update()
+    if extraTabs.meditationPauseMap then return end
     local entries, total, root = collectTargets()
     local visible = {}
     local name = targets[selected].label
