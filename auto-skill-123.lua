@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover v1.3 — background AUTO uses Roblox-scoped input; native foreground selection is preserved.
+-- Auto Skill + NPC Hover v1.4 — mixed enemy containers, nested/headless/skinned rigs and custom-health NPC support.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -446,7 +446,7 @@ create("TextLabel", {
 local hoverRadius = create("TextBox", {
     Position = UDim2.new(1, -91, 0, 98), Size = UDim2.fromOffset(91, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "150", TextColor3 = color.text, TextSize = 16, ClearTextOnFocus = false,
+    Text = "250", TextColor3 = color.text, TextSize = 16, ClearTextOnFocus = false,
 }, hoverPage)
 local hoverToggle = create("TextButton", {
     Position = UDim2.fromOffset(0, 142), Size = UDim2.new(1, 0, 0, 41),
@@ -469,16 +469,11 @@ local hoverStatus = create("TextLabel", {
     BackgroundTransparency = 1, TextColor3 = color.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "เปิดยืนบนหัว แล้วเดินเข้าห้องให้มอนเกิด\nถ้าเปิด Auto Skill ด้วย จะรอถึงมอนก่อนกดสกิล\nนับ NPC ที่มี Humanoid และยังมีชีวิต",
+    Text = "เปิดยืนบนหัว แล้วเดินเข้าห้องให้มอนเกิด\nถ้าเปิด Auto Skill ด้วย จะรอถึงมอนก่อนกดสกิล\nรองรับ Humanoid และ NPC แบบใช้ Health/HP ในโมเดล",
 }, hoverPage)
-local hoverHumanoids = {}
-local function trackHumanoid(object)
-    if object:IsA("Humanoid") then hoverHumanoids[object] = true end
-end
-table.insert(connections, workspace.DescendantAdded:Connect(trackHumanoid))
-table.insert(connections, workspace.DescendantRemoving:Connect(function(object) hoverHumanoids[object] = nil end))
-for _, object in ipairs(workspace:GetDescendants()) do trackHumanoid(object) end
-
+local hoverHumanoids = {} -- Humanoid, AnimationController, or health-bearing enemy model candidates
+local rigCache = setmetatable({}, {__mode = "k"})
+local hoverScanStats = {}
 local function ownCharacter()
     local character = player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -494,11 +489,47 @@ local function isPlayerModel(model)
     end
     return false
 end
-local function targetParts(model)
-    local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-    if not root or not root:IsA("BasePart") then return nil end
-    local head = model:FindFirstChild("Head")
-    if not head or not head:IsA("BasePart") then head = root end
+local function bodyPart(object, model)
+    return object and object:IsA("BasePart") and object:IsDescendantOf(model)
+        and not object:FindFirstAncestorOfClass("Tool")
+        and not object:FindFirstAncestorOfClass("Accessory")
+end
+local function targetParts(model, humanoid)
+    local cached = rigCache[model]
+    if cached and bodyPart(cached.root, model) then
+        local headOK = cached.head and cached.head:IsDescendantOf(model)
+        if headOK or os.clock() < cached.checkAt then return cached.root, headOK and cached.head or nil end
+    end
+    local root = humanoid and humanoid.RootPart
+    if not bodyPart(root, model) then root = model:FindFirstChild("HumanoidRootPart", true) end
+    if not bodyPart(root, model) then root = model.PrimaryPart end
+    if not bodyPart(root, model) then
+        for _, name in ipairs({"RootPart", "Root", "Torso", "UpperTorso", "LowerTorso", "Main", "Body"}) do
+            local candidate = model:FindFirstChild(name, true)
+            if bodyPart(candidate, model) then root = candidate break end
+        end
+    end
+    if not bodyPart(root, model) then
+        local volume = -1
+        for _, object in ipairs(model:GetDescendants()) do
+            if bodyPart(object, model) then
+                local size = object.Size
+                local v = size.X * size.Y * size.Z
+                if v > volume then root, volume = object, v end
+            end
+        end
+    end
+    if not bodyPart(root, model) then return nil end
+    local head
+    for _, object in ipairs(model:GetDescendants()) do
+        if object.Name == "Head" and not object:FindFirstAncestorOfClass("Tool")
+            and not object:FindFirstAncestorOfClass("Accessory")
+            and (object:IsA("BasePart") or object:IsA("Attachment")) then
+            head = object
+            break
+        end
+    end
+    rigCache[model] = {root = root, head = head, checkAt = os.clock() + 0.75, boundsAt = 0}
     return root, head
 end
 local function enemyFolderHint(model)
@@ -513,47 +544,169 @@ local function enemyFolderHint(model)
     end
     return false
 end
+local function friendlyModel(model)
+    if model:GetAttribute("Friendly") == true or model:GetAttribute("IsFriendly") == true
+        or model:GetAttribute("IsEnemy") == false then return true end
+    local object = model.Parent
+    while object and object ~= workspace do
+        local name = string.lower(object.Name)
+        if name == "allies" or name == "allied" or name == "pets"
+            or name == "companions" or name == "friendly" then return true end
+        object = object.Parent
+    end
+    return false
+end
+local function customHealthSource(model)
+    for _, name in ipairs({"CurrentHealth", "CurrentHP", "Health", "HP", "health", "hp"}) do
+        local value = model:GetAttribute(name)
+        if type(value) == "number" and value == value then
+            return {kind = "attribute", object = model, field = name, label = "Attribute." .. name}
+        end
+    end
+    local containers = {model}
+    for _, name in ipairs({"Stats", "Values", "Data", "Vitals"}) do
+        local folder = model:FindFirstChild(name)
+        if folder then containers[#containers + 1] = folder end
+    end
+    for _, container in ipairs(containers) do
+        for _, name in ipairs({"CurrentHealth", "CurrentHP", "Health", "HP", "health", "hp"}) do
+            local value = container:FindFirstChild(name)
+            if value and (value:IsA("NumberValue") or value:IsA("IntValue")) then
+                return {kind = "value", object = value, label = container.Name .. "." .. name}
+            end
+        end
+    end
+end
+local function sourceHealth(source)
+    if not source or not source.object.Parent then return 0 end
+    local value
+    if source.kind == "humanoid" then value = source.object.Health
+    elseif source.kind == "attribute" then value = source.object:GetAttribute(source.field)
+    else value = source.object.Value end
+    return type(value) == "number" and value == value and value or 0
+end
+local function resolveActor(control)
+    local model = control:IsA("Model") and control or control:FindFirstAncestorOfClass("Model")
+    if not model then return nil end
+    local humanoid = control:IsA("Humanoid") and control or model:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        local root = humanoid.RootPart
+        if root and root:IsA("BasePart") then
+            for _ = 1, 4 do
+                if root:IsDescendantOf(model) then break end
+                local parent = model.Parent
+                if not parent or parent == workspace then break end
+                local outer = parent:IsA("Model") and parent or parent:FindFirstAncestorOfClass("Model")
+                if not outer then break end
+                model = outer
+            end
+        end
+        return model, humanoid, {kind = "humanoid", object = humanoid, label = "Humanoid.Health"}
+    end
+    -- Animated/skinned NPCs may store health on their outer model rather than a Humanoid.
+    for _ = 1, 4 do
+        local source = customHealthSource(model)
+        if source then return model, nil, source end
+        local parent = model.Parent
+        if not parent or parent == workspace then break end
+        model = parent:IsA("Model") and parent or parent:FindFirstAncestorOfClass("Model")
+        if not model then break end
+    end
+    return nil
+end
+local function trackHumanoid(object)
+    if object:IsA("Humanoid") or object:IsA("AnimationController")
+        or (object:IsA("Model") and enemyFolderHint(object)) then hoverHumanoids[object] = true end
+end
+table.insert(connections, workspace.DescendantAdded:Connect(trackHumanoid))
+table.insert(connections, workspace.DescendantRemoving:Connect(function(object) hoverHumanoids[object] = nil end))
+for _, object in ipairs(workspace:GetDescendants()) do trackHumanoid(object) end
+
 local function scanHoverTargets(radius, skipped)
     local _, _, root = ownCharacter()
     if not root then return {} end
-    local hinted, fallback, seen = {}, {}, {}
-    for humanoid in pairs(hoverHumanoids) do
-        local model = humanoid.Parent
-        if model and model:IsA("Model") and humanoid.Health > 0
-            and humanoid:IsDescendantOf(workspace) and not skipped[humanoid]
-            and not seen[model] and not isPlayerModel(model)
-            and model:GetAttribute("Friendly") ~= true and model:GetAttribute("IsFriendly") ~= true then
-            local part, head = targetParts(model)
-            if part then
-                local distance = (part.Position - root.Position).Magnitude
-                if distance <= radius then
-                    seen[model] = true
-                    local entry = {model = model, humanoid = humanoid, part = part, head = head,
-                        distance = distance, path = model:GetFullName()}
-                    table.insert(enemyFolderHint(model) and hinted or fallback, entry)
+    local byPart, entries, seenModel = {}, {}, {}
+    local now = os.clock()
+    hoverScanStats = {outside = 0, noPart = 0, friendly = 0, noHealth = 0}
+    for control in pairs(hoverHumanoids) do
+        local model, humanoid, source = resolveActor(control)
+        if not model then
+            hoverScanStats.noHealth = hoverScanStats.noHealth + 1
+        elseif model:IsDescendantOf(workspace) and sourceHealth(source) > 0 and not isPlayerModel(model) then
+            if friendlyModel(model) then
+                hoverScanStats.friendly = hoverScanStats.friendly + 1
+            elseif not seenModel[model] then
+                seenModel[model] = true
+                local part, head = targetParts(model, humanoid)
+                if not part then
+                    hoverScanStats.noPart = hoverScanStats.noPart + 1
+                else
+                    local key = humanoid or model
+                    local excludedUntil = skipped[key]
+                    local excluded = excludedUntil and excludedUntil > now
+                    local distance = (part.Position - root.Position).Magnitude
+                    if distance > radius then
+                        hoverScanStats.outside = hoverScanStats.outside + 1
+                    elseif not excluded then
+                        local entry = {model = model, humanoid = key, rigHumanoid = humanoid, source = source,
+                            part = part, head = head, distance = distance, path = model:GetFullName(),
+                            hinted = enemyFolderHint(model)}
+                        local previous = byPart[part]
+                        -- Deduplicate the same rig discovered through both its controller and model.
+                        if not previous or (source.kind == "humanoid" and previous.source.kind ~= "humanoid") then
+                            byPart[part] = entry
+                        end
+                    end
                 end
             end
         end
     end
-    local entries = #hinted > 0 and hinted or fallback
-    table.sort(entries, function(a, b) return a.distance < b.distance end)
+    for _, entry in pairs(byPart) do entries[#entries + 1] = entry end
+    -- Folder names are a hint only, never a reason to discard other living NPCs.
+    table.sort(entries, function(a, b)
+        if a.distance == b.distance and a.hinted ~= b.hinted then return a.hinted end
+        return a.distance < b.distance
+    end)
     return entries
 end
 local function targetAlive(entry)
-    return entry and entry.model:IsDescendantOf(workspace)
-        and entry.humanoid:IsDescendantOf(entry.model) and entry.humanoid.Health > 0
-        and entry.part:IsDescendantOf(entry.model)
+    if not entry or not entry.model:IsDescendantOf(workspace) or sourceHealth(entry.source) <= 0
+        or entry.model:GetAttribute("Dead") == true or entry.model:GetAttribute("IsDead") == true then return false end
+    local part = targetParts(entry.model, entry.rigHumanoid)
+    if not part then return false end
+    entry.part = part
+    return true
 end
 local function destination(entry, height)
-    local _, head = targetParts(entry.model)
-    if not head then return nil end
-    return head.Position + Vector3.new(0, head.Size.Y * 0.5 + height, 0)
+    local root, head = targetParts(entry.model, entry.rigHumanoid)
+    if not root then return nil end
+    if head then
+        if head:IsA("BasePart") then return head.Position + Vector3.new(0, head.Size.Y * 0.5 + height, 0) end
+        return head.WorldPosition + Vector3.new(0, height, 0)
+    end
+    -- Headless rigs use the model top rather than a point inside their body.
+    local cached = rigCache[entry.model]
+    if not cached.boundsOffset or os.clock() >= cached.boundsAt then
+        local top = root.Position.Y + root.Size.Y * 0.5
+        for _, part in ipairs(entry.model:GetDescendants()) do
+            if bodyPart(part, entry.model) then
+                local frame, size = part.CFrame, part.Size
+                local extent = math.abs(frame.RightVector.Y) * size.X * 0.5
+                    + math.abs(frame.UpVector.Y) * size.Y * 0.5
+                    + math.abs(frame.LookVector.Y) * size.Z * 0.5
+                top = math.max(top, part.Position.Y + extent)
+            end
+        end
+        cached.boundsOffset = top - root.Position.Y
+        cached.boundsAt = os.clock() + 0.50
+    end
+    return root.Position + Vector3.new(0, cached.boundsOffset + height, 0)
 end
 local lastHoverInfoAt = 0
 local function buildHoverController(deps)
     local hover = {}
     local state = {enabled = false, target = nil, ready = false,
-        height = 6, radius = 150, nextScan = 0, placedSince = nil}
+        height = 6, radius = 250, nextScan = 0, placedSince = nil}
     hover.state = state
     local skipped = setmetatable({}, {__mode = "k"})
     local function notify(message) deps.notify(state, message) end
@@ -575,11 +728,11 @@ local function buildHoverController(deps)
         notify("รอมอนเกิด • เดินเข้าจุด Spawn ในห้องได้เลย")
     end
     function hover.next()
-        if state.target then skipped[state.target.humanoid] = true end
+        if state.target then skipped[state.target.humanoid] = deps.clock() + 3 end
         clearTarget()
         state.nextScan = 0
         deps.releaseSkills()
-        notify("กำลังเลือกเป้าหมายตัวถัดไป...")
+        notify("กำลังเลือกเป้าถัดไป • ข้ามตัวเดิมชั่วคราว 3 วินาที")
     end
     function hover.configure(height, radius)
         local oldHeight, oldRadius = state.height, state.radius
@@ -676,7 +829,7 @@ hoverController = buildHoverController({
     end,
     describe = function(entry, ready)
         return string.format("เป้า: %s\nHP: %.0f • %s\n%s",
-            entry.model.Name, entry.humanoid.Health,
+            entry.model.Name, sourceHealth(entry.source),
             ready and "อยู่เหนือหัวแล้ว" or "รอให้อยู่เหนือหัวนิ่งก่อนกดสกิล", entry.path)
     end,
     notify = function(state, message)
@@ -713,7 +866,8 @@ end)
 hoverScan.Activated:Connect(function()
     setHoverConfig()
     local entries = hoverController.scan()
-    local lines = {"พบ NPC ที่มีชีวิตในระยะ: " .. #entries}
+    local lines = {string.format("พบ %d ตัว • นอกระยะ %d • ไม่มีจุดอ้างอิง %d",
+        #entries, hoverScanStats.outside or 0, hoverScanStats.noPart or 0)}
     for index = 1, math.min(4, #entries) do
         local entry = entries[index]
         lines[#lines + 1] = string.format("%s • %.0f studs", entry.model.Name, entry.distance)
