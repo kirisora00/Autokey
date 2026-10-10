@@ -1,4 +1,4 @@
--- Auto Skill 1 / 2 / 3 v1.0 — standalone client window.
+-- Auto Skill 1 / 2 / 3 v1.1 — selectable keyboard providers and observed input diagnostics.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -32,7 +32,7 @@ local gui = create("ScreenGui", {
 }, playerGui)
 local panel = create("Frame", {
     AnchorPoint = Vector2.new(1, 0),
-    Position = UDim2.new(1, -18, 0, 110), Size = UDim2.fromOffset(340, 360),
+    Position = UDim2.new(1, -18, 0, 110), Size = UDim2.fromOffset(340, 410),
     BackgroundColor3 = color.background, BorderSizePixel = 0,
 }, gui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, panel)
@@ -58,7 +58,7 @@ local close = create("TextButton", {
     Text = "X", TextColor3 = color.text, TextSize = 16,
 }, panel)
 local content = create("Frame", {
-    Position = UDim2.fromOffset(14, 50), Size = UDim2.new(1, -28, 0, 296),
+    Position = UDim2.fromOffset(14, 50), Size = UDim2.new(1, -28, 0, 346),
     BackgroundTransparency = 1,
 }, panel)
 create("TextLabel", {
@@ -102,39 +102,124 @@ local faster = create("TextButton", {
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "+", TextColor3 = color.text, TextSize = 19,
 }, content)
+local modeButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 181), Size = UDim2.new(1, 0, 0, 34),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "กำลังเตรียมช่องทางส่งปุ่ม...", TextColor3 = color.text, TextSize = 13,
+}, content)
 local toggle = create("TextButton", {
-    Position = UDim2.fromOffset(0, 181), Size = UDim2.new(1, 0, 0, 43),
+    Position = UDim2.fromOffset(0, 226), Size = UDim2.new(1, 0, 0, 43),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
     Text = "AUTO: OFF — กดเพื่อเริ่ม", TextColor3 = color.text,
     Font = Enum.Font.GothamBold, TextSize = 17,
 }, content)
 local status = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 235), Size = UDim2.new(1, 0, 0, 61),
+    Position = UDim2.fromOffset(0, 280), Size = UDim2.new(1, 0, 0, 66),
     BackgroundTransparency = 1, Text = "พร้อมทดสอบ • AUTO เริ่มต้นปิดอยู่\nลากแถบชื่อเพื่อย้ายหน้าต่างได้",
     TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
 }, content)
 
 local focused, closed, collapsed = true, false, false
-local input, inputMode
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
-local function getInput()
-    if input then return end
-    local ok, value = pcall(function() return UserInputService:CreateVirtualInput() end)
-    if ok and value then input, inputMode = value, "virtual" return end
-    ok, value = pcall(function() return game:GetService("VirtualInputManager") end)
-    if ok and value then input, inputMode = value, "manager" return end
-    error("ตัวรันไม่รองรับการส่งปุ่ม")
-end
-local function sendKey(index, down)
-    getInput()
-    if inputMode == "virtual" then
-        input:SendKey(down, keyCodes[index], false)
-    else
-        input:SendKeyEvent(down, keyCodes[index], false, game)
+local diagnostic = {last = nil, sequence = 0}
+local lastStatus = "พร้อมทดสอบ • AUTO เริ่มต้นปิดอยู่"
+
+local function renderStatus()
+    if closed then return end
+    local line = ""
+    local last = diagnostic.last
+    if last then
+        if last.received then
+            line = "\nพบสัญญาณปุ่ม " .. last.index
+                .. (last.processed and " • processed=true" or "")
+        else
+            line = "\nยังไม่พบสัญญาณปุ่ม " .. last.index .. " ใน Roblox"
+        end
     end
+    local text = lastStatus .. line
+    if status.Text ~= text then status.Text = text end
 end
+
+local function buildInputRouter(deps)
+    local router = {modes = {"VirtualInputManager", "VirtualInput"}, modeIndex = 1}
+    local activeMode, providers = {}, {}
+    if type(deps.keypress) == "function" and type(deps.keyrelease) == "function" then
+        table.insert(router.modes, 1, "Native keys")
+    end
+    function router.mode() return router.modes[router.modeIndex] end
+    function router.cycle()
+        router.modeIndex = router.modeIndex % #router.modes + 1
+        return router.mode()
+    end
+    local function dispatch(mode, index, down)
+        if mode == "Native keys" then
+            -- Number-row virtual keys 0x31, 0x32, 0x33 for compatible runners.
+            if down then deps.keypress(48 + index) else deps.keyrelease(48 + index) end
+        elseif mode == "VirtualInputManager" then
+            if not providers[mode] then providers[mode] = deps.manager() end
+            local provider = providers[mode]
+            if not provider then error("VirtualInputManager unavailable") end
+            provider:SendKeyEvent(down, deps.keyCodes[index], false, deps.layer)
+        else
+            if not providers[mode] then providers[mode] = deps.virtual() end
+            local provider = providers[mode]
+            if not provider then error("VirtualInput unavailable") end
+            provider:SendKey(down, deps.keyCodes[index], false)
+        end
+    end
+    function router.send(index, down)
+        if index < 1 or index > 3 then error("Invalid skill index") end
+        if not down and not activeMode[index] then return end
+        local mode = down and router.mode() or activeMode[index]
+        if down then
+            if deps.blur then deps.blur() end
+            activeMode[index] = mode
+        end
+        local ok, err = pcall(dispatch, mode, index, down)
+        if not ok then
+            if down then
+                -- Clean up the failed attempt without retrying the key-down through another method.
+                pcall(dispatch, mode, index, false)
+                activeMode[index] = nil
+            end
+            error(err, 0)
+        end
+        if not down then activeMode[index] = nil end
+    end
+    return router
+end
+
+local router = buildInputRouter({
+    keypress = keypress, keyrelease = keyrelease,
+    keyCodes = keyCodes, layer = game,
+    manager = function() return game:GetService("VirtualInputManager") end,
+    virtual = function() return UserInputService:CreateVirtualInput() end,
+    blur = function()
+        local selected = GuiService.SelectedObject
+        if selected and selected:IsDescendantOf(gui) then GuiService.SelectedObject = nil end
+    end,
+})
+modeButton.Text = "ส่งปุ่ม: " .. router.mode() .. " • กดเพื่อเปลี่ยน"
+
+local function sendKey(index, down)
+    if down then
+        diagnostic.sequence = diagnostic.sequence + 1
+        diagnostic.last = {
+            id = diagnostic.sequence, index = index,
+            at = os.clock(), received = false, processed = false,
+        }
+    end
+    router.send(index, down)
+end
+table.insert(connections, UserInputService.InputBegan:Connect(function(event, processed)
+    local last = diagnostic.last
+    if last and event.KeyCode == keyCodes[last.index] and os.clock() - last.at <= 0.75 then
+        last.received, last.processed = true, processed
+        task.defer(renderStatus)
+    end
+end))
 local function paused()
     if not focused then return "พัก AUTO ระหว่างสลับออกจากเกม" end
     if UserInputService:GetFocusedTextBox() or GuiService.MenuIsOpen then
@@ -226,7 +311,7 @@ local function buildSkillController(deps)
         end
         state.sent = state.sent + 1
         state.nextAt = deps.clock() + state.interval
-        deps.delay(0.08, function()
+        deps.delay(0.15, function()
             -- An old delayed release must never release a newer key press.
             if state.held == ticket then release(ticket) end
         end)
@@ -270,9 +355,16 @@ local controller = buildSkillController({
         local text = state.enabled and "AUTO: ON — กดเพื่อหยุด" or "AUTO: OFF — กดเพื่อเริ่ม"
         if toggle.Text ~= text then toggle.Text = text end
         toggle.BackgroundColor3 = state.enabled and color.green or color.blue
-        if status.Text ~= message then status.Text = message end
+        lastStatus = message
+        renderStatus()
     end,
-    error = function(err) warn("Auto Skill 123:", err) end,
+    error = function(err)
+        if not closed then
+            lastStatus = "Error: " .. tostring(err):sub(1, 120)
+            renderStatus()
+        end
+        warn("Auto Skill 123:", err)
+    end,
 })
 
 local function changeInterval(value)
@@ -287,10 +379,22 @@ for index = 1, 3 do
         selectionButtons[selectedIndex].Text = selectedIndex .. (selected and ": ON" or ": OFF")
         selectionButtons[selectedIndex].BackgroundColor3 = selected and color.green or color.button
     end)
-    testButtons[selectedIndex].Activated:Connect(function() controller.tap(selectedIndex) end)
+    testButtons[selectedIndex].Activated:Connect(function()
+        focused = true
+        controller.tap(selectedIndex)
+    end)
 end
 toggle.Activated:Connect(function()
+    focused = true
     if controller.state.enabled then controller.stop() else controller.start() end
+end)
+modeButton.Activated:Connect(function()
+    controller.stop()
+    local mode = router.cycle()
+    modeButton.Text = "ส่งปุ่ม: " .. mode .. " • กดเพื่อเปลี่ยน"
+    diagnostic.last = nil
+    lastStatus = "เปลี่ยนเป็น " .. mode .. "\nลองกด 1 ก่อน แล้วค่อยเปิด AUTO"
+    renderStatus()
 end)
 intervalInput.FocusLost:Connect(function() changeInterval(intervalInput.Text) end)
 -- Minus decreases the interval (faster); plus increases it (slower).
@@ -299,7 +403,7 @@ faster.Activated:Connect(function() changeInterval(controller.state.interval + 0
 minimize.Activated:Connect(function()
     collapsed = not collapsed
     content.Visible = not collapsed
-    panel.Size = UDim2.fromOffset(340, collapsed and 43 or 360)
+    panel.Size = UDim2.fromOffset(340, collapsed and 43 or 410)
     minimize.Text = collapsed and "+" or "−"
 end)
 close.Activated:Connect(function() gui:Destroy() end)
