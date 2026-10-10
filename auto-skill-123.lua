@@ -1,4 +1,4 @@
--- Auto Skill 1 / 2 / 3 v1.1 — selectable keyboard providers and observed input diagnostics.
+-- Auto Skill + NPC Hover v1.2 — anonymous living-NPC targeting and room-spawn waiting.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -9,7 +9,19 @@ local player = Players.LocalPlayer
 assert(player, "Run on Client")
 local playerGui = player:WaitForChild("PlayerGui")
 local old = playerGui:FindFirstChild("AutoSkill123Window")
-if old then old:Destroy() end
+local previousInputMode
+if old then
+    previousInputMode = old:GetAttribute("InputModeChoice")
+    if not previousInputMode then
+        for _, object in ipairs(old:GetDescendants()) do
+            if object:IsA("TextButton") then
+                local mode = object.Text:match("^ส่งปุ่ม:%s*(.-)%s*•")
+                if mode then previousInputMode = mode break end
+            end
+        end
+    end
+    old:Destroy()
+end
 
 local function create(className, props, parent)
     local object = Instance.new(className)
@@ -32,7 +44,7 @@ local gui = create("ScreenGui", {
 }, playerGui)
 local panel = create("Frame", {
     AnchorPoint = Vector2.new(1, 0),
-    Position = UDim2.new(1, -18, 0, 110), Size = UDim2.fromOffset(340, 410),
+    Position = UDim2.new(1, -18, 0, 110), Size = UDim2.fromOffset(340, 460),
     BackgroundColor3 = color.background, BorderSizePixel = 0,
 }, gui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, panel)
@@ -43,7 +55,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL 1 / 2 / 3", TextColor3 = color.text,
+    Text = "AUTO SKILL + ยืนบนหัว", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -57,8 +69,18 @@ local close = create("TextButton", {
     BackgroundColor3 = Color3.fromRGB(145, 49, 62), BorderSizePixel = 0,
     Text = "X", TextColor3 = color.text, TextSize = 16,
 }, panel)
+local skillTab = create("TextButton", {
+    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(152, 31),
+    BackgroundColor3 = color.blue, BorderSizePixel = 0,
+    Text = "Auto Skill 1/2/3", TextColor3 = color.text, TextSize = 14,
+}, panel)
+local hoverTab = create("TextButton", {
+    Position = UDim2.fromOffset(174, 49), Size = UDim2.fromOffset(152, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "ยืนบนหัวมอน", TextColor3 = color.text, TextSize = 14,
+}, panel)
 local content = create("Frame", {
-    Position = UDim2.fromOffset(14, 50), Size = UDim2.new(1, -28, 0, 346),
+    Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
     BackgroundTransparency = 1,
 }, panel)
 create("TextLabel", {
@@ -201,6 +223,9 @@ local router = buildInputRouter({
         if selected and selected:IsDescendantOf(gui) then GuiService.SelectedObject = nil end
     end,
 })
+local previousIndex = previousInputMode and table.find(router.modes, previousInputMode)
+if previousIndex then router.modeIndex = previousIndex end
+gui:SetAttribute("InputModeChoice", router.mode())
 modeButton.Text = "ส่งปุ่ม: " .. router.mode() .. " • กดเพื่อเปลี่ยน"
 
 local function sendKey(index, down)
@@ -220,6 +245,7 @@ table.insert(connections, UserInputService.InputBegan:Connect(function(event, pr
         task.defer(renderStatus)
     end
 end))
+local hoverController
 local function paused()
     if not focused then return "พัก AUTO ระหว่างสลับออกจากเกม" end
     if UserInputService:GetFocusedTextBox() or GuiService.MenuIsOpen then
@@ -229,6 +255,9 @@ local function paused()
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not character or not humanoid or humanoid.Health <= 0 then
         return "พัก AUTO รอตัวละครเกิดใหม่"
+    end
+    if hoverController and hoverController.state.enabled and not hoverController.readyForSkills() then
+        return "พักสกิล • รอมอนเกิดหรือรอไปอยู่เหนือหัวมอน"
     end
 end
 
@@ -367,6 +396,331 @@ local controller = buildSkillController({
     end,
 })
 
+
+-- Anonymous NPC tracking: indexed once, then maintained by workspace events.
+local hoverPage = create("Frame", {
+    Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
+    BackgroundTransparency = 1, Visible = false,
+}, panel)
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1,
+    Text = "หาตัวใกล้สุดโดยไม่ต้องรู้ชื่อ • ตามเหนือหัวจนตาย\nถ้ายังไม่มีมอน จะปล่อยให้เดินเข้าจุด Spawn ต่อได้",
+    TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, hoverPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 57), Size = UDim2.fromOffset(205, 31),
+    BackgroundTransparency = 1, Text = "ความสูงเหนือหัว (studs)",
+    TextColor3 = color.muted, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+}, hoverPage)
+local hoverHeight = create("TextBox", {
+    Position = UDim2.new(1, -91, 0, 57), Size = UDim2.fromOffset(91, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "6", TextColor3 = color.text, TextSize = 16, ClearTextOnFocus = false,
+}, hoverPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 98), Size = UDim2.fromOffset(205, 31),
+    BackgroundTransparency = 1, Text = "ระยะค้นหามอน (studs)",
+    TextColor3 = color.muted, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+}, hoverPage)
+local hoverRadius = create("TextBox", {
+    Position = UDim2.new(1, -91, 0, 98), Size = UDim2.fromOffset(91, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "150", TextColor3 = color.text, TextSize = 16, ClearTextOnFocus = false,
+}, hoverPage)
+local hoverToggle = create("TextButton", {
+    Position = UDim2.fromOffset(0, 142), Size = UDim2.new(1, 0, 0, 41),
+    BackgroundColor3 = color.blue, BorderSizePixel = 0,
+    Text = "ยืนบนหัว: OFF — กดเพื่อเริ่ม", TextColor3 = color.text,
+    Font = Enum.Font.GothamBold, TextSize = 16,
+}, hoverPage)
+local hoverNext = create("TextButton", {
+    Position = UDim2.fromOffset(0, 191), Size = UDim2.fromOffset(152, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "เลือกเป้าถัดไป", TextColor3 = color.text, TextSize = 13,
+}, hoverPage)
+local hoverScan = create("TextButton", {
+    Position = UDim2.fromOffset(160, 191), Size = UDim2.fromOffset(152, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "สแกนใกล้ตัว", TextColor3 = color.text, TextSize = 13,
+}, hoverPage)
+local hoverStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 236), Size = UDim2.new(1, 0, 0, 110),
+    BackgroundTransparency = 1, TextColor3 = color.muted,
+    TextSize = 13, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "เปิดยืนบนหัว แล้วเดินเข้าห้องให้มอนเกิด\nถ้าเปิด Auto Skill ด้วย จะรอถึงมอนก่อนกดสกิล\nนับ NPC ที่มี Humanoid และยังมีชีวิต",
+}, hoverPage)
+local hoverHumanoids = {}
+local function trackHumanoid(object)
+    if object:IsA("Humanoid") then hoverHumanoids[object] = true end
+end
+table.insert(connections, workspace.DescendantAdded:Connect(trackHumanoid))
+table.insert(connections, workspace.DescendantRemoving:Connect(function(object) hoverHumanoids[object] = nil end))
+for _, object in ipairs(workspace:GetDescendants()) do trackHumanoid(object) end
+
+local function ownCharacter()
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not character or not humanoid or not root or humanoid.Health <= 0
+        or not character:IsDescendantOf(workspace) then return nil end
+    return character, humanoid, root
+end
+local function isPlayerModel(model)
+    for _, other in ipairs(Players:GetPlayers()) do
+        local character = other.Character
+        if character and (model == character or model:IsDescendantOf(character)) then return true end
+    end
+    return false
+end
+local function targetParts(model)
+    local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+    if not root or not root:IsA("BasePart") then return nil end
+    local head = model:FindFirstChild("Head")
+    if not head or not head:IsA("BasePart") then head = root end
+    return root, head
+end
+local function enemyFolderHint(model)
+    local object = model.Parent
+    while object and object ~= workspace do
+        local name = string.lower(object.Name)
+        if name == "enemy" or name == "enemies" or name == "mob" or name == "mobs"
+            or name == "monster" or name == "monsters" or name == "boss" or name == "bosses" then
+            return true
+        end
+        object = object.Parent
+    end
+    return false
+end
+local function scanHoverTargets(radius, skipped)
+    local _, _, root = ownCharacter()
+    if not root then return {} end
+    local hinted, fallback, seen = {}, {}, {}
+    for humanoid in pairs(hoverHumanoids) do
+        local model = humanoid.Parent
+        if model and model:IsA("Model") and humanoid.Health > 0
+            and humanoid:IsDescendantOf(workspace) and not skipped[humanoid]
+            and not seen[model] and not isPlayerModel(model)
+            and model:GetAttribute("Friendly") ~= true and model:GetAttribute("IsFriendly") ~= true then
+            local part, head = targetParts(model)
+            if part then
+                local distance = (part.Position - root.Position).Magnitude
+                if distance <= radius then
+                    seen[model] = true
+                    local entry = {model = model, humanoid = humanoid, part = part, head = head,
+                        distance = distance, path = model:GetFullName()}
+                    table.insert(enemyFolderHint(model) and hinted or fallback, entry)
+                end
+            end
+        end
+    end
+    local entries = #hinted > 0 and hinted or fallback
+    table.sort(entries, function(a, b) return a.distance < b.distance end)
+    return entries
+end
+local function targetAlive(entry)
+    return entry and entry.model:IsDescendantOf(workspace)
+        and entry.humanoid:IsDescendantOf(entry.model) and entry.humanoid.Health > 0
+        and entry.part:IsDescendantOf(entry.model)
+end
+local function destination(entry, height)
+    local _, head = targetParts(entry.model)
+    if not head then return nil end
+    return head.Position + Vector3.new(0, head.Size.Y * 0.5 + height, 0)
+end
+local lastHoverInfoAt = 0
+local function buildHoverController(deps)
+    local hover = {}
+    local state = {enabled = false, target = nil, ready = false,
+        height = 6, radius = 150, nextScan = 0, placedSince = nil}
+    hover.state = state
+    local skipped = setmetatable({}, {__mode = "k"})
+    local function notify(message) deps.notify(state, message) end
+    local function clearTarget()
+        state.target, state.ready, state.placedSince = nil, false, nil
+    end
+    function hover.stop()
+        state.enabled = false
+        clearTarget()
+        deps.releaseSkills()
+        notify("หยุดยืนบนหัวแล้ว • เดินได้ตามปกติ")
+    end
+    function hover.start()
+        state.enabled = true
+        clearTarget()
+        skipped = setmetatable({}, {__mode = "k"})
+        state.nextScan = 0
+        deps.releaseSkills()
+        notify("รอมอนเกิด • เดินเข้าจุด Spawn ในห้องได้เลย")
+    end
+    function hover.next()
+        if state.target then skipped[state.target.humanoid] = true end
+        clearTarget()
+        state.nextScan = 0
+        deps.releaseSkills()
+        notify("กำลังเลือกเป้าหมายตัวถัดไป...")
+    end
+    function hover.configure(height, radius)
+        local oldHeight, oldRadius = state.height, state.radius
+        local h, r = tonumber(height), tonumber(radius)
+        if h and h == h then state.height = math.max(3, math.min(50, h)) end
+        if r and r == r then state.radius = math.max(20, math.min(600, r)) end
+        if state.height ~= oldHeight or state.radius ~= oldRadius then
+            state.ready, state.placedSince = false, nil
+        end
+    end
+    function hover.readyForSkills()
+        return state.enabled and state.ready and state.target ~= nil
+            and deps.alive(state.target) and deps.inPosition(state.target, state.height)
+    end
+    function hover.scan()
+        return deps.scan(state.radius, skipped)
+    end
+    function hover.step()
+        if not state.enabled then return end
+        local ready, reason = deps.playerReady()
+        if not ready then
+            state.ready, state.placedSince = false, nil
+            deps.releaseSkills()
+            notify(reason or "รอตัวละครพร้อม...")
+            return
+        end
+        if state.target and not deps.alive(state.target) then
+            clearTarget()
+            state.nextScan = 0
+            deps.releaseSkills()
+        end
+        if not state.target then
+            if deps.clock() < state.nextScan then return end
+            state.nextScan = deps.clock() + 0.40
+            local entries = deps.scan(state.radius, skipped)
+            if not entries[1] then
+                notify("ยังไม่มีมอนในระยะ • ไม่ล็อกตำแหน่งตัวละคร\nเดินเข้าห้อง/จุด Spawn ต่อได้ • ระยะ " .. state.radius .. " studs")
+                return
+            end
+            state.target = entries[1]
+            state.ready, state.placedSince = false, nil
+        end
+        local switched = state.placedSince == nil
+        local moved, message = deps.follow(state.target, state.height, switched)
+        if not moved then
+            state.ready, state.placedSince = false, nil
+            deps.releaseSkills()
+            notify(message or "รอก่อนวาร์ป...")
+            return
+        end
+        state.placedSince = state.placedSince or deps.clock()
+        state.ready = deps.clock() - state.placedSince >= 0.30
+        notify(deps.describe(state.target, state.ready))
+    end
+    return hover
+end
+
+hoverController = buildHoverController({
+    clock = os.clock, scan = scanHoverTargets, alive = targetAlive,
+    releaseSkills = controller.release,
+    playerReady = function()
+        local _, humanoid = ownCharacter()
+        if not humanoid then return false, "รอตัวละครเกิดใหม่" end
+        if humanoid.SeatPart then return false, "ลงจากที่นั่งก่อนครับ" end
+        return true
+    end,
+    inPosition = function(entry, height)
+        local _, _, root = ownCharacter()
+        local point = destination(entry, height)
+        return root and point and (root.Position - point).Magnitude <= 8
+    end,
+    follow = function(entry, height, switching)
+        local _, humanoid, root = ownCharacter()
+        local point = destination(entry, height)
+        if not root or not point then return false, "รอตำแหน่งมอนโหลด..." end
+        if root.Anchored then return false, "รอเกมปลดล็อกตัวละครจากสกิล..." end
+        if switching then
+            local animator = humanoid:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, animation in ipairs(animator:GetPlayingAnimationTracks()) do
+                    local priority = animation.Priority
+                    local action = priority == Enum.AnimationPriority.Action or priority == Enum.AnimationPriority.Action2
+                        or priority == Enum.AnimationPriority.Action3 or priority == Enum.AnimationPriority.Action4
+                    if action and not animation.Looped and animation.IsPlaying then
+                        return false, "รอสกิลจบก่อนวาร์ปเปลี่ยนเป้าหมาย..."
+                    end
+                end
+            end
+        end
+        root.CFrame = CFrame.new(point) * root.CFrame.Rotation
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        return true
+    end,
+    describe = function(entry, ready)
+        return string.format("เป้า: %s\nHP: %.0f • %s\n%s",
+            entry.model.Name, entry.humanoid.Health,
+            ready and "อยู่เหนือหัวแล้ว" or "รอให้อยู่เหนือหัวนิ่งก่อนกดสกิล", entry.path)
+    end,
+    notify = function(state, message)
+        if closed then return end
+        local text = state.enabled and "ยืนบนหัว: ON — กดเพื่อหยุด" or "ยืนบนหัว: OFF — กดเพื่อเริ่ม"
+        if hoverToggle.Text ~= text then hoverToggle.Text = text end
+        hoverToggle.BackgroundColor3 = state.enabled and color.green or color.blue
+        if not state.enabled or os.clock() >= lastHoverInfoAt then
+            lastHoverInfoAt = os.clock() + 0.25
+            if hoverStatus.Text ~= message then hoverStatus.Text = message end
+        end
+    end,
+})
+local function setHoverConfig()
+    hoverController.configure(hoverHeight.Text, hoverRadius.Text)
+    hoverHeight.Text = tostring(hoverController.state.height)
+    hoverRadius.Text = tostring(hoverController.state.radius)
+end
+hoverHeight.FocusLost:Connect(setHoverConfig)
+hoverRadius.FocusLost:Connect(setHoverConfig)
+hoverToggle.Activated:Connect(function()
+    focused = true
+    if hoverController.state.enabled then
+        hoverController.stop()
+    else
+        setHoverConfig()
+        hoverController.start()
+    end
+end)
+hoverNext.Activated:Connect(function()
+    if hoverController.state.enabled then hoverController.next()
+    else hoverStatus.Text = "เปิดยืนบนหัวก่อน แล้วค่อยเลือกตัวถัดไปครับ" end
+end)
+hoverScan.Activated:Connect(function()
+    setHoverConfig()
+    local entries = hoverController.scan()
+    local lines = {"พบ NPC ที่มีชีวิตในระยะ: " .. #entries}
+    for index = 1, math.min(4, #entries) do
+        local entry = entries[index]
+        lines[#lines + 1] = string.format("%s • %.0f studs", entry.model.Name, entry.distance)
+    end
+    if #entries == 0 then lines[#lines + 1] = "เดินเข้าจุด Spawn ก่อน หรือเพิ่มระยะค้นหา" end
+    hoverStatus.Text = table.concat(lines, "\n")
+end)
+local activePage = "skills"
+local function showWindowPage(name)
+    activePage = name
+    content.Visible = not collapsed and name == "skills"
+    hoverPage.Visible = not collapsed and name == "hover"
+    skillTab.BackgroundColor3 = name == "skills" and color.blue or color.button
+    hoverTab.BackgroundColor3 = name == "hover" and color.blue or color.button
+end
+skillTab.Activated:Connect(function() showWindowPage("skills") end)
+hoverTab.Activated:Connect(function() showWindowPage("hover") end)
+table.insert(connections, RunService.Heartbeat:Connect(function()
+    if closed or not hoverController.state.enabled then return end
+    local ok, err = pcall(hoverController.step)
+    if not ok then
+        hoverController.stop()
+        hoverStatus.Text = "ยืนบนหัวหยุดเพราะ Error: " .. tostring(err):sub(1, 150)
+        warn("NPC Hover:", err)
+    end
+end))
+
 local function changeInterval(value)
     controller.interval(value)
     intervalInput.Text = string.format("%.2f", controller.state.interval)
@@ -391,6 +745,7 @@ end)
 modeButton.Activated:Connect(function()
     controller.stop()
     local mode = router.cycle()
+    gui:SetAttribute("InputModeChoice", mode)
     modeButton.Text = "ส่งปุ่ม: " .. mode .. " • กดเพื่อเปลี่ยน"
     diagnostic.last = nil
     lastStatus = "เปลี่ยนเป็น " .. mode .. "\nลองกด 1 ก่อน แล้วค่อยเปิด AUTO"
@@ -402,8 +757,9 @@ slower.Activated:Connect(function() changeInterval(controller.state.interval - 0
 faster.Activated:Connect(function() changeInterval(controller.state.interval + 0.25) end)
 minimize.Activated:Connect(function()
     collapsed = not collapsed
-    content.Visible = not collapsed
-    panel.Size = UDim2.fromOffset(340, collapsed and 43 or 410)
+    skillTab.Visible, hoverTab.Visible = not collapsed, not collapsed
+    showWindowPage(activePage)
+    panel.Size = UDim2.fromOffset(340, collapsed and 43 or 460)
     minimize.Text = collapsed and "+" or "−"
 end)
 close.Activated:Connect(function() gui:Destroy() end)
@@ -449,6 +805,8 @@ end))
 gui.Destroying:Connect(function()
     closed, dragging = true, false
     controller.dispose()
+    if hoverController then hoverController.stop() end
+    table.clear(hoverHumanoids)
     for _, connection in ipairs(connections) do connection:Disconnect() end
     table.clear(connections)
 end)
