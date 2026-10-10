@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover v1.2 — anonymous living-NPC targeting and room-spawn waiting.
+-- Auto Skill + NPC Hover v1.3 — background AUTO uses Roblox-scoped input; native foreground selection is preserved.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -146,6 +146,13 @@ local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
 local diagnostic = {last = nil, sequence = 0}
+local function gameFocused()
+    if type(isrbxactive) == "function" then
+        local ok, value = pcall(isrbxactive)
+        if ok and type(value) == "boolean" then return value end
+    end
+    return focused
+end
 local lastStatus = "พร้อมทดสอบ • AUTO เริ่มต้นปิดอยู่"
 
 local function renderStatus()
@@ -153,7 +160,12 @@ local function renderStatus()
     local line = ""
     local last = diagnostic.last
     if last then
-        if last.received then
+        if not gameFocused() then
+            local mode = last.mode == "Native keys" and "VirtualInputManager" or last.mode
+            line = "\nเบื้องหลัง • ส่งผ่าน " .. mode
+        elseif last.background then
+            line = "\nล่าสุดส่งเบื้องหลังผ่าน " .. last.mode
+        elseif last.received then
             line = "\nพบสัญญาณปุ่ม " .. last.index
                 .. (last.processed and " • processed=true" or "")
         else
@@ -171,6 +183,14 @@ local function buildInputRouter(deps)
         table.insert(router.modes, 1, "Native keys")
     end
     function router.mode() return router.modes[router.modeIndex] end
+    function router.effectiveMode()
+        local mode = router.mode()
+        if mode == "Native keys" and deps.focused and not deps.focused() then
+            -- Never send a number-key DOWN to an unrelated foreground application.
+            return "VirtualInputManager"
+        end
+        return mode
+    end
     function router.cycle()
         router.modeIndex = router.modeIndex % #router.modes + 1
         return router.mode()
@@ -194,7 +214,7 @@ local function buildInputRouter(deps)
     function router.send(index, down)
         if index < 1 or index > 3 then error("Invalid skill index") end
         if not down and not activeMode[index] then return end
-        local mode = down and router.mode() or activeMode[index]
+        local mode = down and router.effectiveMode() or activeMode[index]
         if down then
             if deps.blur then deps.blur() end
             activeMode[index] = mode
@@ -216,6 +236,7 @@ end
 local router = buildInputRouter({
     keypress = keypress, keyrelease = keyrelease,
     keyCodes = keyCodes, layer = game,
+    focused = gameFocused,
     manager = function() return game:GetService("VirtualInputManager") end,
     virtual = function() return UserInputService:CreateVirtualInput() end,
     blur = function()
@@ -233,7 +254,7 @@ local function sendKey(index, down)
         diagnostic.sequence = diagnostic.sequence + 1
         diagnostic.last = {
             id = diagnostic.sequence, index = index,
-            at = os.clock(), received = false, processed = false,
+            at = os.clock(), received = false, processed = false, mode = router.effectiveMode(), background = not gameFocused(),
         }
     end
     router.send(index, down)
@@ -247,7 +268,6 @@ table.insert(connections, UserInputService.InputBegan:Connect(function(event, pr
 end))
 local hoverController
 local function paused()
-    if not focused then return "พัก AUTO ระหว่างสลับออกจากเกม" end
     if UserInputService:GetFocusedTextBox() or GuiService.MenuIsOpen then
         return "พัก AUTO ระหว่างพิมพ์หรือเปิดเมนู Roblox"
     end
@@ -792,8 +812,12 @@ table.insert(connections, GuiService.MenuOpened:Connect(function() controller.re
 table.insert(connections, UserInputService.WindowFocusReleased:Connect(function()
     focused, dragging = false, false
     controller.release()
+    renderStatus()
 end))
-table.insert(connections, UserInputService.WindowFocused:Connect(function() focused = true end))
+table.insert(connections, UserInputService.WindowFocused:Connect(function()
+    focused = true
+    renderStatus()
+end))
 table.insert(connections, player.CharacterRemoving:Connect(function() controller.release() end))
 local nextTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
