@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.7 — bounded actor indexing, cached rig geometry and 20 Hz hover updates.
+-- Auto Skill + NPC Hover + Flight v1.8 — F1 flight, F2 hover and F3 auto skill shortcuts.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -147,6 +147,11 @@ local status = create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
 }, content)
 
+local hotkeyHint = create("TextLabel", {
+    Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
+    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 11,
+    Text = "F1 บิน • F2 ยืนบนหัว • F3 Auto Skill",
+}, panel)
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
@@ -1172,14 +1177,15 @@ local function stepFlight()
     f.orientation.CFrame = CFrame.lookAt(Vector3.zero, forward)
 end
 -- Flight event wiring.
-flyButton.Activated:Connect(function()
+local function toggleFlight()
     if flight then stopFlight() return end
     local ok, err = pcall(startFlight)
     if not ok then
         stopFlight("เปิดบินไม่สำเร็จ • ดู Error ใน Console")
         warn("Auto Skill Flight:", err)
     end
-end)
+end
+flyButton.Activated:Connect(toggleFlight)
 local function changeFlySpeed(delta)
     flySpeed = math.clamp(flySpeed + delta, 20, 200)
     flySpeedLabel.Text = "Speed: " .. flySpeed .. " studs/s"
@@ -1211,7 +1217,7 @@ local function setHoverConfig()
 end
 hoverHeight.FocusLost:Connect(setHoverConfig)
 hoverRadius.FocusLost:Connect(setHoverConfig)
-hoverToggle.Activated:Connect(function()
+local function toggleHover()
     focused = true
     if hoverController.state.enabled then
         hoverController.stop()
@@ -1220,7 +1226,8 @@ hoverToggle.Activated:Connect(function()
         setHoverConfig()
         hoverController.start()
     end
-end)
+end
+hoverToggle.Activated:Connect(toggleHover)
 hoverNext.Activated:Connect(function()
     if hoverController.state.enabled then hoverController.next()
     else hoverStatus.Text = "เปิดยืนบนหัวก่อน แล้วค่อยเลือกตัวถัดไปครับ" end
@@ -1325,6 +1332,7 @@ end)
 local activePage = "skills"
 local function showWindowPage(name)
     activePage = name
+    hotkeyHint.Visible = not collapsed
     content.Visible = not collapsed and name == "skills"
     hoverPage.Visible = not collapsed and name == "hover"
     flightPage.Visible = not collapsed and name == "flight"
@@ -1367,10 +1375,43 @@ for index = 1, 3 do
         controller.tap(selectedIndex)
     end)
 end
-toggle.Activated:Connect(function()
+local function toggleSkills()
     focused = true
     if controller.state.enabled then controller.stop() else controller.start() end
-end)
+end
+toggle.Activated:Connect(toggleSkills)
+
+-- Keydown edges only: holding a shortcut must not repeatedly toggle the feature.
+local function buildHotkeyController(deps)
+    local held = {}
+    local hotkeys = {}
+    function hotkeys.begin(input, processed)
+        local key = input.KeyCode
+        local action = deps.actions[key]
+        if not action or held[key] then return end
+        held[key] = true
+        if processed or deps.blocked() then return end
+        local ok, err = pcall(action)
+        if not ok then deps.error(err) end
+    end
+    function hotkeys.finish(input) held[input.KeyCode] = nil end
+    function hotkeys.clear() table.clear(held) end
+    return hotkeys
+end
+local hotkeys = buildHotkeyController({
+    actions = {
+        [Enum.KeyCode.F1] = toggleFlight,
+        [Enum.KeyCode.F2] = toggleHover,
+        [Enum.KeyCode.F3] = toggleSkills,
+    },
+    blocked = function()
+        return closed or not gameFocused() or GuiService.MenuIsOpen
+            or UserInputService:GetFocusedTextBox() ~= nil
+    end,
+    error = function(err) warn("Auto Skill Hotkey:", err) end,
+})
+table.insert(connections, UserInputService.InputBegan:Connect(hotkeys.begin))
+table.insert(connections, UserInputService.InputEnded:Connect(hotkeys.finish))
 modeButton.Activated:Connect(function()
     controller.stop()
     local mode = router.cycle()
@@ -1420,6 +1461,7 @@ table.insert(connections, UserInputService.TextBoxFocused:Connect(function() con
 table.insert(connections, GuiService.MenuOpened:Connect(function() controller.release() clearFlightInput() end))
 table.insert(connections, UserInputService.WindowFocusReleased:Connect(function()
     focused, dragging = false, false
+    hotkeys.clear()
     clearFlightInput()
     controller.release()
     renderStatus()
@@ -1441,6 +1483,7 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
 end))
 gui.Destroying:Connect(function()
     closed, dragging = true, false
+    hotkeys.clear()
     controller.dispose()
     stopFlight("ปิดหน้าต่างแล้ว")
     if hoverController then hoverController.stop() end
