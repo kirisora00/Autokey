@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover v1.5 — world nameplates, custom actor health and immune-boss summon priority.
+-- Auto Skill + NPC Hover + Flight v1.6 — camera-relative flight with cleanup and mutually exclusive hover.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -55,7 +55,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL + ยืนบนหัว", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -70,14 +70,19 @@ local close = create("TextButton", {
     Text = "X", TextColor3 = color.text, TextSize = 16,
 }, panel)
 local skillTab = create("TextButton", {
-    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(152, 31),
+    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(100, 31),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
-    Text = "Auto Skill 1/2/3", TextColor3 = color.text, TextSize = 14,
+    Text = "Skill 1/2/3", TextColor3 = color.text, TextSize = 14,
 }, panel)
 local hoverTab = create("TextButton", {
-    Position = UDim2.fromOffset(174, 49), Size = UDim2.fromOffset(152, 31),
+    Position = UDim2.fromOffset(120, 49), Size = UDim2.fromOffset(100, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "ยืนบนหัวมอน", TextColor3 = color.text, TextSize = 14,
+}, panel)
+local flightTab = create("TextButton", {
+    Position = UDim2.fromOffset(226, 49), Size = UDim2.fromOffset(100, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "บิน / Flight", TextColor3 = color.text, TextSize = 14,
 }, panel)
 local content = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
@@ -471,6 +476,48 @@ local hoverStatus = create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
     Text = "v1.5 • รองรับป้ายเลือดบนตัวมอน\nบอส IMMUNE: จัดการลูกน้องก่อน\nสแกน + ข้อมูล: คัดลอกข้อมูลไว้ตรวจตัวที่หาไม่เจอ",
 }, hoverPage)
+local flightPage = create("Frame", {
+    Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
+    BackgroundTransparency = 1, Visible = false,
+}, panel)
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1,
+    Text = "Flight / การบิน", TextColor3 = color.text,
+    Font = Enum.Font.GothamBold, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Left,
+}, flightPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 42), Size = UDim2.new(1, 0, 0, 100),
+    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 15,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "W / A / S / D   เคลื่อนที่ตามมุมกล้อง\nSpace   บินขึ้น\nCtrl   บินลง\nปล่อยปุ่ม   ลอยอยู่กับที่",
+}, flightPage)
+local flySpeedLabel = create("TextLabel", {
+    Position = UDim2.fromOffset(46, 157), Size = UDim2.new(1, -92, 0, 36),
+    BackgroundTransparency = 1, Text = "Speed: 70 studs/s",
+    TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
+}, flightPage)
+local flySlower = create("TextButton", {
+    Position = UDim2.fromOffset(0, 157), Size = UDim2.fromOffset(40, 36),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "−", TextSize = 21, TextColor3 = color.text,
+}, flightPage)
+local flyFaster = create("TextButton", {
+    Position = UDim2.new(1, -40, 0, 157), Size = UDim2.fromOffset(40, 36),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "+", TextSize = 21, TextColor3 = color.text,
+}, flightPage)
+local flyButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 214), Size = UDim2.new(1, 0, 0, 44),
+    BackgroundColor3 = color.blue, BorderSizePixel = 0,
+    TextColor3 = color.text, Font = Enum.Font.GothamBold,
+    TextSize = 17, Text = "FLIGHT: OFF — กดเพื่อบิน",
+}, flightPage)
+local flyStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 271), Size = UDim2.new(1, 0, 0, 75),
+    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
+    Text = "เปิดบินจะหยุดยืนบนหัวมอนและ Auto Skill\nยุบหน้าต่างแล้วบินต่อได้ • ปิดบินเพื่อเดินปกติ",
+}, flightPage)
+
 local hoverHumanoids = {} -- Humanoid, AnimationController, or health-bearing enemy model candidates
 local rigCache = setmetatable({}, {__mode = "k"})
 local hoverScanStats = {}
@@ -965,6 +1012,143 @@ hoverController = buildHoverController({
         end
     end,
 })
+-- Flight logic: retain the same controls and speed range as target-locator.lua.
+local flight, flyPressed, flySpeed = nil, {}, 70
+local function stopFlight(message)
+    local previous = flight
+    flight = nil
+    table.clear(flyPressed)
+    if previous then
+        -- Destroy constraints before their attachment, including partially created sessions.
+        for index = #previous.objects, 1, -1 do
+            pcall(function() previous.objects[index]:Destroy() end)
+        end
+        if previous.root.Parent then
+            previous.root.AssemblyLinearVelocity = Vector3.zero
+            previous.root.AssemblyAngularVelocity = Vector3.zero
+        end
+        if previous.humanoid.Parent then
+            previous.humanoid.AutoRotate = previous.autoRotate
+            previous.humanoid.PlatformStand = previous.platformStand
+            if previous.humanoid.Health > 0 and not previous.platformStand then
+                previous.humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end
+    end
+    flyButton.Text = "FLIGHT: OFF — กดเพื่อบิน"
+    flyButton.BackgroundColor3 = color.blue
+    flyStatus.Text = message or "ปิดบินแล้ว • เดินได้ตามปกติ"
+end
+local function startFlight()
+    if flight then return end
+    local character, humanoid, root = ownCharacter()
+    if not root then flyStatus.Text = "รอตัวละครเกิดก่อนครับ" return end
+    if humanoid.SeatPart then flyStatus.Text = "ลงจากที่นั่งก่อนเปิดบินครับ" return end
+    if root.Anchored then flyStatus.Text = "รอเกมปลดล็อกตัวละครก่อนเปิดบินครับ" return end
+    if hoverController.state.enabled then hoverController.stop() end
+    controller.stop()
+    table.clear(flyPressed)
+    flight = {character = character, humanoid = humanoid, root = root,
+        autoRotate = humanoid.AutoRotate, platformStand = humanoid.PlatformStand, objects = {}}
+    local function own(object)
+        flight.objects[#flight.objects + 1] = object
+        return object
+    end
+    local attachment = own(Instance.new("Attachment"))
+    attachment.Name, attachment.Parent = "AutoSkillFlightAttachment", root
+    local velocity = own(Instance.new("LinearVelocity"))
+    velocity.Enabled = false
+    velocity.Name = "AutoSkillFlightVelocity"
+    velocity.Attachment0 = attachment
+    velocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+    velocity.ForceLimitsEnabled = false
+    velocity.VectorVelocity = Vector3.zero
+    velocity.Parent = root
+    local orientation = own(Instance.new("AlignOrientation"))
+    orientation.Enabled = false
+    orientation.Name = "AutoSkillFlightOrientation"
+    orientation.Attachment0 = attachment
+    orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    orientation.RigidityEnabled = true
+    orientation.CFrame = root.CFrame.Rotation
+    orientation.Parent = root
+    flight.velocity, flight.orientation = velocity, orientation
+    humanoid.AutoRotate, humanoid.PlatformStand = false, true
+    root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+    orientation.Enabled, velocity.Enabled = true, true
+    flyButton.Text, flyButton.BackgroundColor3 = "FLIGHT: ON — กดเพื่อหยุด", color.green
+    flyStatus.Text = "กำลังบิน • W/A/S/D + Space / Ctrl\nยุบหน้าต่างแล้วบินต่อได้"
+end
+local function clearFlightInput()
+    table.clear(flyPressed)
+    if flight and flight.velocity then flight.velocity.VectorVelocity = Vector3.zero end
+end
+local function stepFlight()
+    if not flight then return end
+    local f = flight
+    if player.Character ~= f.character or not f.root:IsDescendantOf(workspace)
+        or f.humanoid.Health <= 0 or f.humanoid.SeatPart or f.root.Anchored then
+        stopFlight("หยุดบินแล้ว • เปิดใหม่เมื่อตัวละครพร้อมครับ")
+        return
+    end
+    local camera = workspace.CurrentCamera
+    if not camera then f.velocity.VectorVelocity = Vector3.zero return end
+    local look = camera.CFrame.LookVector
+    local forward = Vector3.new(look.X, 0, look.Z)
+    if forward.Magnitude < 0.001 then
+        local right = camera.CFrame.RightVector
+        forward = Vector3.new(right.Z, 0, -right.X)
+    end
+    forward = forward.Unit
+    local right, movement = Vector3.new(-forward.Z, 0, forward.X), Vector3.zero
+    if gameFocused() and not UserInputService:GetFocusedTextBox() and not GuiService.MenuIsOpen then
+        if flyPressed[Enum.KeyCode.W] then movement = movement + forward end
+        if flyPressed[Enum.KeyCode.S] then movement = movement - forward end
+        if flyPressed[Enum.KeyCode.D] then movement = movement + right end
+        if flyPressed[Enum.KeyCode.A] then movement = movement - right end
+        if flyPressed[Enum.KeyCode.Space] then movement = movement + Vector3.yAxis end
+        if flyPressed[Enum.KeyCode.LeftControl] or flyPressed[Enum.KeyCode.RightControl] then
+            movement = movement - Vector3.yAxis
+        end
+    end
+    if movement.Magnitude > 1 then movement = movement.Unit end
+    f.velocity.VectorVelocity = movement * flySpeed
+    f.orientation.CFrame = CFrame.lookAt(Vector3.zero, forward)
+end
+-- Flight event wiring.
+flyButton.Activated:Connect(function()
+    if flight then stopFlight() return end
+    local ok, err = pcall(startFlight)
+    if not ok then
+        stopFlight("เปิดบินไม่สำเร็จ • ดู Error ใน Console")
+        warn("Auto Skill Flight:", err)
+    end
+end)
+local function changeFlySpeed(delta)
+    flySpeed = math.clamp(flySpeed + delta, 20, 200)
+    flySpeedLabel.Text = "Speed: " .. flySpeed .. " studs/s"
+end
+flySlower.Activated:Connect(function() changeFlySpeed(-10) end)
+flyFaster.Activated:Connect(function() changeFlySpeed(10) end)
+table.insert(connections, UserInputService.InputBegan:Connect(function(input, processed)
+    if not flight or processed or not gameFocused() or GuiService.MenuIsOpen
+        or UserInputService:GetFocusedTextBox() then return end
+    flyPressed[input.KeyCode] = true
+end))
+table.insert(connections, UserInputService.InputEnded:Connect(function(input)
+    flyPressed[input.KeyCode] = nil
+end))
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if closed or not flight then return end
+    local ok, err = pcall(stepFlight)
+    if not ok then
+        stopFlight("หยุดบินเพราะ Error • ดู Console")
+        warn("Auto Skill Flight:", err)
+    end
+end))
+-- End flight logic.
+
 local function setHoverConfig()
     hoverController.configure(hoverHeight.Text, hoverRadius.Text)
     hoverHeight.Text = tostring(hoverController.state.height)
@@ -977,6 +1161,7 @@ hoverToggle.Activated:Connect(function()
     if hoverController.state.enabled then
         hoverController.stop()
     else
+        stopFlight("ปิดบินเพื่อยืนบนหัวมอน")
         setHoverConfig()
         hoverController.start()
     end
@@ -1086,11 +1271,14 @@ local function showWindowPage(name)
     activePage = name
     content.Visible = not collapsed and name == "skills"
     hoverPage.Visible = not collapsed and name == "hover"
+    flightPage.Visible = not collapsed and name == "flight"
     skillTab.BackgroundColor3 = name == "skills" and color.blue or color.button
     hoverTab.BackgroundColor3 = name == "hover" and color.blue or color.button
+    flightTab.BackgroundColor3 = name == "flight" and color.blue or color.button
 end
 skillTab.Activated:Connect(function() showWindowPage("skills") end)
 hoverTab.Activated:Connect(function() showWindowPage("hover") end)
+flightTab.Activated:Connect(function() showWindowPage("flight") end)
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or not hoverController.state.enabled then return end
     local ok, err = pcall(hoverController.step)
@@ -1137,7 +1325,7 @@ slower.Activated:Connect(function() changeInterval(controller.state.interval - 0
 faster.Activated:Connect(function() changeInterval(controller.state.interval + 0.25) end)
 minimize.Activated:Connect(function()
     collapsed = not collapsed
-    skillTab.Visible, hoverTab.Visible = not collapsed, not collapsed
+    skillTab.Visible, hoverTab.Visible, flightTab.Visible = not collapsed, not collapsed, not collapsed
     showWindowPage(activePage)
     panel.Size = UDim2.fromOffset(340, collapsed and 43 or 460)
     minimize.Text = collapsed and "+" or "−"
@@ -1167,10 +1355,11 @@ table.insert(connections, UserInputService.InputChanged:Connect(function(event)
     local y = math.clamp(position.Y, 0, math.max(0, view.Y - size.Y))
     panel.Position = UDim2.fromOffset(x + size.X, y)
 end))
-table.insert(connections, UserInputService.TextBoxFocused:Connect(function() controller.release() end))
-table.insert(connections, GuiService.MenuOpened:Connect(function() controller.release() end))
+table.insert(connections, UserInputService.TextBoxFocused:Connect(function() controller.release() clearFlightInput() end))
+table.insert(connections, GuiService.MenuOpened:Connect(function() controller.release() clearFlightInput() end))
 table.insert(connections, UserInputService.WindowFocusReleased:Connect(function()
     focused, dragging = false, false
+    clearFlightInput()
     controller.release()
     renderStatus()
 end))
@@ -1178,7 +1367,10 @@ table.insert(connections, UserInputService.WindowFocused:Connect(function()
     focused = true
     renderStatus()
 end))
-table.insert(connections, player.CharacterRemoving:Connect(function() controller.release() end))
+table.insert(connections, player.CharacterRemoving:Connect(function()
+    controller.release()
+    stopFlight("ตัวละครหายไป • เปิดบินใหม่หลังเกิดครับ")
+end))
 local nextTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or os.clock() < nextTick then return end
@@ -1189,6 +1381,7 @@ end))
 gui.Destroying:Connect(function()
     closed, dragging = true, false
     controller.dispose()
+    stopFlight("ปิดหน้าต่างแล้ว")
     if hoverController then hoverController.stop() end
     table.clear(hoverHumanoids)
     table.clear(hoverBillboards)
