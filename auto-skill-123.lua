@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.8 — F1 flight, F2 hover and F3 auto skill shortcuts.
+-- Auto Skill + NPC Hover + Flight v1.9 — coordinated casting/flight, debounced shortcuts and explicit reload cleanup.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -8,8 +8,17 @@ local GuiService = game:GetService("GuiService")
 local player = Players.LocalPlayer
 assert(player, "Run on Client")
 local playerGui = player:WaitForChild("PlayerGui")
+local sessionEnv = _G
+if type(getgenv) == "function" then
+    local ok, value = pcall(getgenv)
+    if ok and type(value) == "table" then sessionEnv = value end
+end
+local previousSession = sessionEnv.AutokeySkill123Session
+if type(previousSession) == "table" and type(previousSession.cleanup) == "function" then
+    pcall(previousSession.cleanup)
+end
 local old = playerGui:FindFirstChild("AutoSkill123Window")
-local previousInputMode
+local previousInputMode = type(previousSession) == "table" and previousSession.inputMode or nil
 if old then
     previousInputMode = old:GetAttribute("InputModeChoice")
     if not previousInputMode then
@@ -21,6 +30,7 @@ if old then
         end
     end
     old:Destroy()
+    task.wait() -- Let older versions finish their deferred Destroying handlers before setting up a new session.
 end
 
 local function create(className, props, parent)
@@ -155,6 +165,21 @@ local hotkeyHint = create("TextLabel", {
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
+local hotkeys
+local session = {disposed = false}
+sessionEnv.AutokeySkill123Session = session
+local function cleanupSession(destroyGui)
+    if session.disposed then return end
+    session.disposed, closed = true, true
+    -- Disconnect first; an error while restoring physics must not leave callbacks running.
+    for _, connection in ipairs(connections) do pcall(function() connection:Disconnect() end) end
+    table.clear(connections)
+    for _, stop in ipairs(session.stops or {}) do pcall(stop) end
+    if sessionEnv.AutokeySkill123Session == session then sessionEnv.AutokeySkill123Session = nil end
+    if destroyGui ~= false then pcall(function() gui:Destroy() end) end
+end
+session.cleanup = cleanupSession
+table.insert(connections, gui.Destroying:Connect(function() cleanupSession(false) end))
 local diagnostic = {last = nil, sequence = 0}
 local function gameFocused()
     if type(isrbxactive) == "function" then
@@ -257,6 +282,7 @@ local router = buildInputRouter({
 local previousIndex = previousInputMode and table.find(router.modes, previousInputMode)
 if previousIndex then router.modeIndex = previousIndex end
 gui:SetAttribute("InputModeChoice", router.mode())
+session.inputMode = router.mode()
 modeButton.Text = "ส่งปุ่ม: " .. router.mode() .. " • กดเพื่อเปลี่ยน"
 
 local function sendKey(index, down)
@@ -270,13 +296,35 @@ local function sendKey(index, down)
     router.send(index, down)
 end
 table.insert(connections, UserInputService.InputBegan:Connect(function(event, processed)
+    if hotkeys then hotkeys.begin(event, processed) end
     local last = diagnostic.last
     if last and event.KeyCode == keyCodes[last.index] and os.clock() - last.at <= 0.75 then
         last.received, last.processed = true, processed
         task.defer(renderStatus)
     end
 end))
-local hoverController
+local hoverController, controller
+-- Read action animations at most ten times per second, shared by skills and flight.
+local animationCache = {humanoid = nil, at = 0, busy = false}
+local function skillAnimationBusy(humanoid)
+    local now = os.clock()
+    if animationCache.humanoid == humanoid and now < animationCache.at then return animationCache.busy end
+    local busy = false
+    local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            local priority = track.Priority
+            if track.IsPlaying and not track.Looped and
+                (priority == Enum.AnimationPriority.Action or priority == Enum.AnimationPriority.Action2
+                or priority == Enum.AnimationPriority.Action3 or priority == Enum.AnimationPriority.Action4) then
+                busy = true
+                break
+            end
+        end
+    end
+    animationCache.humanoid, animationCache.at, animationCache.busy = humanoid, now + 0.10, busy
+    return busy
+end
 local function paused()
     if UserInputService:GetFocusedTextBox() or GuiService.MenuIsOpen then
         return "พัก AUTO ระหว่างพิมพ์หรือเปิดเมนู Roblox"
@@ -285,6 +333,9 @@ local function paused()
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not character or not humanoid or humanoid.Health <= 0 then
         return "พัก AUTO รอตัวละครเกิดใหม่"
+    end
+    if not (controller and controller.state.held) and skillAnimationBusy(humanoid) then
+        return "รอแอนิเมชันสกิลจบก่อนกดตัวถัดไป"
     end
     if hoverController and hoverController.state.enabled and not hoverController.readyForSkills() then
         return "พักสกิล • รอมอนเกิดหรือรอไปอยู่เหนือหัวมอน"
@@ -407,7 +458,7 @@ local function buildSkillController(deps)
 end
 
 
-local controller = buildSkillController({
+controller = buildSkillController({
     clock = os.clock, delay = task.delay, send = sendKey, paused = paused,
     notify = function(state, message)
         if closed then return end
@@ -1122,7 +1173,8 @@ local function startFlight()
     velocity.Attachment0 = attachment
     velocity.RelativeTo = Enum.ActuatorRelativeTo.World
     velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-    velocity.ForceLimitsEnabled = false
+    velocity.ForceLimitsEnabled = true
+    velocity.MaxForce = math.max(root.AssemblyMass, 1) * math.max(workspace.Gravity, 1) * 4
     velocity.VectorVelocity = Vector3.zero
     velocity.Parent = root
     local orientation = own(Instance.new("AlignOrientation"))
@@ -1130,10 +1182,22 @@ local function startFlight()
     orientation.Name = "AutoSkillFlightOrientation"
     orientation.Attachment0 = attachment
     orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
-    orientation.RigidityEnabled = true
+    orientation.RigidityEnabled = false
+    orientation.MaxTorque = math.max(root.AssemblyMass, 1) * 4000
+    orientation.MaxAngularVelocity = 8
+    orientation.Responsiveness = 20
     orientation.CFrame = root.CFrame.Rotation
     orientation.Parent = root
-    flight.velocity, flight.orientation = velocity, orientation
+    local support = own(Instance.new("VectorForce"))
+    support.Enabled = false
+    support.Name = "AutoSkillFlightCastSupport"
+    support.Attachment0 = attachment
+    support.RelativeTo = Enum.ActuatorRelativeTo.World
+    support.ApplyAtCenterOfMass = true
+    support.Force = Vector3.new(0, root.AssemblyMass * workspace.Gravity, 0)
+    support.Parent = root
+    flight.velocity, flight.orientation, flight.support = velocity, orientation, support
+    flight.casting = false
     humanoid.AutoRotate, humanoid.PlatformStand = false, true
     root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
     orientation.Enabled, velocity.Enabled = true, true
@@ -1148,8 +1212,27 @@ local function stepFlight()
     if not flight then return end
     local f = flight
     if player.Character ~= f.character or not f.root:IsDescendantOf(workspace)
-        or f.humanoid.Health <= 0 or f.humanoid.SeatPart or f.root.Anchored then
+        or f.humanoid.Health <= 0 or f.humanoid.SeatPart then
         stopFlight("หยุดบินแล้ว • เปิดใหม่เมื่อตัวละครพร้อมครับ")
+        return
+    end
+    local casting = f.root.Anchored or skillAnimationBusy(f.humanoid)
+    if casting ~= f.casting then
+        f.casting = casting
+        f.velocity.Enabled, f.orientation.Enabled = not casting, not casting
+        if casting then f.humanoid.PlatformStand = f.platformStand
+        else f.humanoid.PlatformStand = true end
+        if casting then
+            clearFlightInput()
+            flyStatus.Text = "ใช้สกิลอยู่ • พักการบังคับบินชั่วคราว\nสกิลจบแล้วบินต่อได้ • F1 ปิดบิน"
+        else
+            flyStatus.Text = "กำลังบิน • W/A/S/D + Space / Ctrl\nF1 ปิดบิน • F3 เปิด/ปิด Auto Skill"
+        end
+    end
+    f.support.Enabled = casting and not f.root.Anchored
+    if casting then
+        -- Cancel gravity only. Let the game's own skill move and rotate the character.
+        f.support.Force = Vector3.new(0, f.root.AssemblyMass * workspace.Gravity, 0)
         return
     end
     local camera = workspace.CurrentCamera
@@ -1198,6 +1281,7 @@ table.insert(connections, UserInputService.InputBegan:Connect(function(input, pr
     flyPressed[input.KeyCode] = true
 end))
 table.insert(connections, UserInputService.InputEnded:Connect(function(input)
+    if hotkeys then hotkeys.finish(input) end
     flyPressed[input.KeyCode] = nil
 end))
 table.insert(connections, RunService.RenderStepped:Connect(function()
@@ -1383,7 +1467,7 @@ toggle.Activated:Connect(toggleSkills)
 
 -- Keydown edges only: holding a shortcut must not repeatedly toggle the feature.
 local function buildHotkeyController(deps)
-    local held = {}
+    local held, cooldown = {}, {}
     local hotkeys = {}
     function hotkeys.begin(input, processed)
         local key = input.KeyCode
@@ -1391,6 +1475,9 @@ local function buildHotkeyController(deps)
         if not action or held[key] then return end
         held[key] = true
         if processed or deps.blocked() then return end
+        local now = deps.clock()
+        if cooldown[key] and now < cooldown[key] then return end
+        cooldown[key] = now + 0.25
         local ok, err = pcall(action)
         if not ok then deps.error(err) end
     end
@@ -1398,7 +1485,8 @@ local function buildHotkeyController(deps)
     function hotkeys.clear() table.clear(held) end
     return hotkeys
 end
-local hotkeys = buildHotkeyController({
+hotkeys = buildHotkeyController({
+    clock = os.clock,
     actions = {
         [Enum.KeyCode.F1] = toggleFlight,
         [Enum.KeyCode.F2] = toggleHover,
@@ -1410,12 +1498,12 @@ local hotkeys = buildHotkeyController({
     end,
     error = function(err) warn("Auto Skill Hotkey:", err) end,
 })
-table.insert(connections, UserInputService.InputBegan:Connect(hotkeys.begin))
-table.insert(connections, UserInputService.InputEnded:Connect(hotkeys.finish))
+-- Shortcuts share the existing input handlers; no additional input listeners or polling loop.
 modeButton.Activated:Connect(function()
     controller.stop()
     local mode = router.cycle()
     gui:SetAttribute("InputModeChoice", mode)
+    session.inputMode = mode
     modeButton.Text = "ส่งปุ่ม: " .. mode .. " • กดเพื่อเปลี่ยน"
     diagnostic.last = nil
     lastStatus = "เปลี่ยนเป็น " .. mode .. "\nลองกด 1 ก่อน แล้วค่อยเปิด AUTO"
@@ -1481,15 +1569,15 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
     local ok, err = pcall(controller.step)
     if not ok then controller.stop() warn("Auto Skill 123:", err) end
 end))
-gui.Destroying:Connect(function()
-    closed, dragging = true, false
-    hotkeys.clear()
-    controller.dispose()
-    stopFlight("ปิดหน้าต่างแล้ว")
-    if hoverController then hoverController.stop() end
-    table.clear(hoverHumanoids)
-    table.clear(hoverModels)
-    table.clear(hoverBillboards)
-    for _, connection in ipairs(connections) do connection:Disconnect() end
-    table.clear(connections)
-end)
+session.stops = {
+    hotkeys.clear,
+    controller.dispose,
+    function() stopFlight("ปิดหน้าต่างแล้ว") end,
+    function() if hoverController then hoverController.stop() end end,
+    function()
+        table.clear(hoverHumanoids)
+        table.clear(hoverModels)
+        table.clear(hoverBillboards)
+    end,
+}
+if closed then cleanupSession() end
