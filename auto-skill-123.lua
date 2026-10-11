@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.9 — coordinated casting/flight, debounced shortcuts and explicit reload cleanup.
+-- Auto Skill + NPC Hover + Flight v1.10 — hold the flight position while casting skills.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -287,6 +287,7 @@ modeButton.Text = "ส่งปุ่ม: " .. router.mode() .. " • กดเ�
 
 local function sendKey(index, down)
     if down then
+        if session.captureFlightCast then session.captureFlightCast() end
         diagnostic.sequence = diagnostic.sequence + 1
         diagnostic.last = {
             id = diagnostic.sequence, index = index,
@@ -1197,7 +1198,7 @@ local function startFlight()
     support.Force = Vector3.new(0, root.AssemblyMass * workspace.Gravity, 0)
     support.Parent = root
     flight.velocity, flight.orientation, flight.support = velocity, orientation, support
-    flight.casting = false
+    flight.casting, flight.castFrame, flight.castPendingUntil = false, nil, 0
     humanoid.AutoRotate, humanoid.PlatformStand = false, true
     root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
     orientation.Enabled, velocity.Enabled = true, true
@@ -1208,6 +1209,16 @@ local function clearFlightInput()
     table.clear(flyPressed)
     if flight and flight.velocity then flight.velocity.VectorVelocity = Vector3.zero end
 end
+local function captureFlightCast()
+    local f = flight
+    if not f or not f.root.Parent then return end
+    local now = os.clock()
+    if not f.casting and now >= f.castPendingUntil then f.castFrame = f.root.CFrame end
+    f.castPendingUntil = now + 0.35
+    table.clear(flyPressed)
+    f.velocity.VectorVelocity = Vector3.zero
+end
+session.captureFlightCast = captureFlightCast
 local function stepFlight()
     if not flight then return end
     local f = flight
@@ -1216,23 +1227,28 @@ local function stepFlight()
         stopFlight("หยุดบินแล้ว • เปิดใหม่เมื่อตัวละครพร้อมครับ")
         return
     end
-    local casting = f.root.Anchored or skillAnimationBusy(f.humanoid)
+    local casting = os.clock() < f.castPendingUntil or f.root.Anchored or skillAnimationBusy(f.humanoid)
     if casting ~= f.casting then
         f.casting = casting
         f.velocity.Enabled, f.orientation.Enabled = not casting, not casting
         if casting then f.humanoid.PlatformStand = f.platformStand
         else f.humanoid.PlatformStand = true end
         if casting then
+            f.castFrame = f.castFrame or f.root.CFrame
             clearFlightInput()
-            flyStatus.Text = "ใช้สกิลอยู่ • พักการบังคับบินชั่วคราว\nสกิลจบแล้วบินต่อได้ • F1 ปิดบิน"
+            flyStatus.Text = "ใช้สกิลอยู่ • ล็อกตำแหน่งเดิม\nสกิลจบแล้วบินต่อได้ • F1 ปิดบิน"
         else
+            f.castFrame = nil
             flyStatus.Text = "กำลังบิน • W/A/S/D + Space / Ctrl\nF1 ปิดบิน • F3 เปิด/ปิด Auto Skill"
         end
     end
     f.support.Enabled = casting and not f.root.Anchored
     if casting then
-        -- Cancel gravity only. Let the game's own skill move and rotate the character.
+        -- Keep the saved transform; root motion must not carry the player away while casting.
         f.support.Force = Vector3.new(0, f.root.AssemblyMass * workspace.Gravity, 0)
+        if f.castFrame then f.root.CFrame = f.castFrame end
+        f.root.AssemblyLinearVelocity = Vector3.zero
+        f.root.AssemblyAngularVelocity = Vector3.zero
         return
     end
     local camera = workspace.CurrentCamera
@@ -1278,6 +1294,9 @@ flyFaster.Activated:Connect(function() changeFlySpeed(10) end)
 table.insert(connections, UserInputService.InputBegan:Connect(function(input, processed)
     if not flight or processed or not gameFocused() or GuiService.MenuIsOpen
         or UserInputService:GetFocusedTextBox() then return end
+    if input.KeyCode == keyCodes[1] or input.KeyCode == keyCodes[2] or input.KeyCode == keyCodes[3] then
+        captureFlightCast()
+    end
     flyPressed[input.KeyCode] = true
 end))
 table.insert(connections, UserInputService.InputEnded:Connect(function(input)
