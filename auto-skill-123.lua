@@ -1,9 +1,10 @@
--- Auto Skill + NPC Hover + Flight v1.11 — classic flight response and held movement keys resume after casting.
+-- Auto Skill + NPC Hover + Flight v1.12 — Auto E for nearby visible proximity prompts.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local GuiService = game:GetService("GuiService")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 
 local player = Players.LocalPlayer
 assert(player, "Run on Client")
@@ -80,19 +81,24 @@ local close = create("TextButton", {
     Text = "X", TextColor3 = color.text, TextSize = 16,
 }, panel)
 local skillTab = create("TextButton", {
-    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(100, 31),
+    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(72, 31),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
-    Text = "Skill 1/2/3", TextColor3 = color.text, TextSize = 14,
+    Text = "Skill 1/2/3", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local hoverTab = create("TextButton", {
-    Position = UDim2.fromOffset(120, 49), Size = UDim2.fromOffset(100, 31),
+    Position = UDim2.fromOffset(94, 49), Size = UDim2.fromOffset(72, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "ยืนบนหัวมอน", TextColor3 = color.text, TextSize = 14,
+    Text = "ยืนบนหัว", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local flightTab = create("TextButton", {
-    Position = UDim2.fromOffset(226, 49), Size = UDim2.fromOffset(100, 31),
+    Position = UDim2.fromOffset(174, 49), Size = UDim2.fromOffset(72, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "บิน / Flight", TextColor3 = color.text, TextSize = 14,
+    Text = "บิน / Flight", TextColor3 = color.text, TextSize = 12,
+}, panel)
+local autoETab = create("TextButton", {
+    Position = UDim2.fromOffset(254, 49), Size = UDim2.fromOffset(72, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "Auto E", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local content = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
@@ -160,12 +166,13 @@ local status = create("TextLabel", {
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 11,
-    Text = "F1 บิน • F2 ยืนบนหัว • F3 Auto Skill",
+    Text = "F1 บิน • F2 บนหัว • F3 Skill • F4 Auto E",
 }, panel)
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
-local hotkeys
+local hotkeys, autoEController
+local autoEPrompts, autoEVisible, autoECursor = {}, {}, nil
 local session = {disposed = false}
 sessionEnv.AutokeySkill123Session = session
 local function cleanupSession(destroyGui)
@@ -334,6 +341,9 @@ local function paused()
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not character or not humanoid or humanoid.Health <= 0 then
         return "พัก AUTO รอตัวละครเกิดใหม่"
+    end
+    if autoEController and autoEController.state.held then
+        return "พักสกิลระหว่างกด E โต้ตอบ"
     end
     if not (controller and controller.state.held) and skillAnimationBusy(humanoid) then
         return "รอแอนิเมชันสกิลจบก่อนกดตัวถัดไป"
@@ -820,6 +830,8 @@ local function trackHumanoid(object)
         hoverModels[object] = true
     elseif object:IsA("BillboardGui") then
         hoverBillboards[object] = true
+    elseif object:IsA("ProximityPrompt") then
+        autoEPrompts[object] = true
     end
     dirtyGeometry(object)
 end
@@ -832,6 +844,8 @@ local function untrack(object)
     hoverHumanoids[object], hoverBillboards[object], hoverModels[object] = nil, nil, nil
     rigCache[object], plateCache[object] = nil, nil
     if modelCursor == object then modelCursor = nil end
+    autoEPrompts[object], autoEVisible[object] = nil, nil
+    if autoECursor == object then autoECursor = nil end
 end
 local function refreshHoverModels()
     local started = os.clock()
@@ -852,7 +866,8 @@ for _, object in ipairs(workspace:GetDescendants()) do
     -- Bootstrap only indexes classes. Geometry invalidation is for later changes.
     if object:IsA("Humanoid") or object:IsA("AnimationController") then hoverHumanoids[object] = true
     elseif object:IsA("Model") then hoverModels[object] = true
-    elseif object:IsA("BillboardGui") then hoverBillboards[object] = true end
+    elseif object:IsA("BillboardGui") then hoverBillboards[object] = true
+    elseif object:IsA("ProximityPrompt") then autoEPrompts[object] = true end
 end
 for _, object in ipairs(playerGui:GetDescendants()) do
     if object:IsA("BillboardGui") then hoverBillboards[object] = true end
@@ -1429,6 +1444,198 @@ hoverScan.Activated:Connect(function()
     hoverReportUntil = os.clock() + 6
     hoverStatus.Text = table.concat(lines, "\n")
 end)
+-- Auto E is prompt-based. It does not spam the keyboard or rescan the map each frame.
+local autoEPage = create("Frame", {
+    Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
+    BackgroundTransparency = 1, Visible = false,
+}, panel)
+create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 110), BackgroundTransparency = 1,
+    Text = "เดินเข้าใกล้จุดที่ขึ้นปุ่ม E แล้วกดให้อัตโนมัติ\nรองรับกดค้างตามเวลาของจุดนั้น\nกดครั้งเดียวต่อจุด จนเดินออกแล้วกลับมาใหม่\nพักระหว่างพิมพ์หรือเปิดเมนู Roblox",
+    TextColor3 = color.muted, TextSize = 14, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, autoEPage)
+local autoEButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 133), Size = UDim2.new(1, 0, 0, 44),
+    BackgroundColor3 = color.blue, BorderSizePixel = 0,
+    Text = "AUTO E: OFF — กดเพื่อเริ่ม", TextColor3 = color.text,
+    Font = Enum.Font.GothamBold, TextSize = 16,
+}, autoEPage)
+local autoEStatus = create("TextLabel", {
+    Position = UDim2.fromOffset(0, 196), Size = UDim2.new(1, 0, 0, 145),
+    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 14, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    Text = "Auto E เริ่มต้นปิดอยู่ • F4 เปิด/ปิด\nเดินเข้าใกล้จุดโต้ตอบหลังเปิดได้เลย",
+}, autoEPage)
+local function buildAutoEController(deps)
+    local state = {enabled = false, held = nil, count = 0, nextScan = 0}
+    local done = setmetatable({}, {__mode = "k"})
+    local auto = {state = state}
+    local function notify(message) deps.notify(state, message) end
+    local function release()
+        local ticket = state.held
+        state.held = nil
+        if ticket then
+            local ok, err = pcall(deps.finish, ticket.prompt)
+            if not ok then deps.error(err) end
+        end
+    end
+    function auto.stop()
+        state.enabled = false
+        release()
+        notify("หยุด Auto E แล้ว • รวม " .. state.count .. " ครั้ง")
+    end
+    function auto.start()
+        release()
+        done = setmetatable({}, {__mode = "k"})
+        state.enabled, state.nextScan = true, 0
+        notify("AUTO E เปิดอยู่ • เดินเข้าใกล้จุดที่ขึ้น E ได้เลย")
+    end
+    function auto.hidden(prompt)
+        if state.held and state.held.prompt == prompt then release() end
+    end
+    function auto.triggered(prompt)
+        if not state.enabled then return end
+        if not done[prompt] or done[prompt] ~= "confirmed" then
+            state.count = state.count + 1
+        end
+        done[prompt] = "confirmed"
+        if state.held and state.held.prompt == prompt then release() end
+        notify("โต้ตอบแล้ว: " .. deps.name(prompt) .. " • รวม " .. state.count .. " ครั้ง")
+    end
+    function auto.step()
+        if not state.enabled then return end
+        for prompt in pairs(done) do if not deps.inRange(prompt) then done[prompt] = nil end end
+        local reason = deps.blocked()
+        if reason then
+            if state.held then
+                local prompt = state.held.prompt
+                release()
+                if done[prompt] ~= "confirmed" then done[prompt] = nil end
+            end
+            notify(reason)
+            return
+        end
+        if state.held then
+            local ticket = state.held
+            if not deps.eligible(ticket.prompt) then
+                release()
+            elseif deps.clock() >= ticket.untilAt then
+                release()
+                notify("กด E แล้ว • รอเดินออกจากจุดก่อนกดอีกครั้ง")
+            end
+            return
+        end
+        if deps.clock() < state.nextScan then return end
+        state.nextScan = deps.clock() + 0.10
+        local nearest, distance
+        for _, prompt in ipairs(deps.candidates()) do
+            if not done[prompt] then
+                local eligible, currentDistance = deps.eligible(prompt)
+                if eligible and (not distance or currentDistance < distance) then
+                    nearest, distance = prompt, currentDistance
+                end
+            end
+        end
+        if not nearest then notify("รอเข้าใกล้จุดโต้ตอบที่ใช้ E • รวม " .. state.count .. " ครั้ง") return end
+        done[nearest] = "attempted"
+        state.held = {prompt = nearest, untilAt = deps.clock() + math.max(0, deps.duration(nearest)) + 0.10}
+        deps.releaseSkills()
+        local ok, err = pcall(deps.begin, nearest)
+        if not ok then
+            release()
+            notify("กด E ไม่สำเร็จ • ดู Error ใน Console")
+            deps.error(err)
+        elseif state.held then
+            notify("กำลังกด E: " .. deps.name(nearest))
+        end
+    end
+    return auto
+end
+local function promptPosition(prompt)
+    if not prompt.Parent or not prompt:IsDescendantOf(workspace) then return nil end
+    local parent = prompt.Parent
+    if parent:IsA("Attachment") then return parent.WorldPosition, parent.Parent end
+    if parent:IsA("BasePart") then return parent.Position, parent end
+    if parent:IsA("Model") then return parent:GetPivot().Position, parent end
+end
+local function promptRange(prompt)
+    local character, _, root = ownCharacter()
+    local position, object = promptPosition(prompt)
+    if not root or not position then return false end
+    local distance = (position - root.Position).Magnitude
+    return distance <= prompt.MaxActivationDistance, distance, position, object, character
+end
+local function eligiblePrompt(prompt)
+    if not ProximityPromptService.Enabled or not prompt.Enabled or prompt.KeyboardKeyCode ~= Enum.KeyCode.E then return false end
+    local near, distance, position, object, character = promptRange(prompt)
+    if not near then return false end
+    if prompt.RequiresLineOfSight then
+        local camera = workspace.CurrentCamera
+        local origin = camera and camera.CFrame.Position or character:GetPivot().Position
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {character}
+        local hit = workspace:Raycast(origin, position - origin, params)
+        if hit and hit.Instance ~= object and not hit.Instance:IsDescendantOf(object) then return false end
+    end
+    return true, distance
+end
+autoEController = buildAutoEController({
+    clock = os.clock, eligible = eligiblePrompt, inRange = promptRange,
+    duration = function(prompt) return prompt.HoldDuration end,
+    name = function(prompt)
+        if prompt.ObjectText ~= "" then return prompt.ObjectText end
+        if prompt.ActionText ~= "" then return prompt.ActionText end
+        return prompt.Parent and prompt.Parent.Name or prompt.Name
+    end,
+    begin = function(prompt) prompt:InputHoldBegin() end,
+    finish = function(prompt) prompt:InputHoldEnd() end,
+    releaseSkills = controller.release,
+    blocked = function()
+        if closed then return "ปิดหน้าต่างแล้ว" end
+        if not ownCharacter() then return "รอตัวละครเกิดใหม่" end
+        if UserInputService:GetFocusedTextBox() or GuiService.MenuIsOpen then return "พัก Auto E ระหว่างพิมพ์หรือเปิดเมนู" end
+    end,
+    candidates = function()
+        local values, seen = {}, {}
+        -- PromptShown gives the visible nearby prompts immediately.
+        for prompt in pairs(autoEVisible) do values[#values + 1] = prompt seen[prompt] = true end
+        -- A small fallback handles a prompt that was already shown before this script was run.
+        for _ = 1, 24 do
+            local prompt = next(autoEPrompts, autoECursor)
+            autoECursor = prompt
+            if not prompt then break end
+            if not seen[prompt] then values[#values + 1] = prompt end
+        end
+        return values
+    end,
+    notify = function(state, message)
+        if closed then return end
+        local text = state.enabled and "AUTO E: ON — กดเพื่อหยุด" or "AUTO E: OFF — กดเพื่อเริ่ม"
+        if autoEButton.Text ~= text then autoEButton.Text = text end
+        local background = state.enabled and color.green or color.blue
+        if autoEButton.BackgroundColor3 ~= background then autoEButton.BackgroundColor3 = background end
+        if autoEStatus.Text ~= message then autoEStatus.Text = message end
+    end,
+    error = function(err) warn("Auto E:", err) end,
+})
+local function toggleAutoE()
+    if autoEController.state.enabled then autoEController.stop() else autoEController.start() end
+end
+autoEButton.Activated:Connect(toggleAutoE)
+table.insert(connections, ProximityPromptService.PromptShown:Connect(function(prompt)
+    if prompt.KeyboardKeyCode == Enum.KeyCode.E then autoEVisible[prompt] = true end
+end))
+table.insert(connections, ProximityPromptService.PromptHidden:Connect(function(prompt)
+    autoEVisible[prompt] = nil
+    autoEController.hidden(prompt)
+end))
+table.insert(connections, ProximityPromptService.PromptTriggered:Connect(function(prompt, who)
+    if who == player and prompt.KeyboardKeyCode == Enum.KeyCode.E then autoEController.triggered(prompt) end
+end))
+-- End Auto E.
+
 local activePage = "skills"
 local function showWindowPage(name)
     activePage = name
@@ -1436,13 +1643,16 @@ local function showWindowPage(name)
     content.Visible = not collapsed and name == "skills"
     hoverPage.Visible = not collapsed and name == "hover"
     flightPage.Visible = not collapsed and name == "flight"
+    autoEPage.Visible = not collapsed and name == "autoE"
     skillTab.BackgroundColor3 = name == "skills" and color.blue or color.button
     hoverTab.BackgroundColor3 = name == "hover" and color.blue or color.button
     flightTab.BackgroundColor3 = name == "flight" and color.blue or color.button
+    autoETab.BackgroundColor3 = name == "autoE" and color.blue or color.button
 end
 skillTab.Activated:Connect(function() showWindowPage("skills") end)
 hoverTab.Activated:Connect(function() showWindowPage("hover") end)
 flightTab.Activated:Connect(function() showWindowPage("flight") end)
+autoETab.Activated:Connect(function() showWindowPage("autoE") end)
 local nextHoverTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or not hoverController.state.enabled or os.clock() < nextHoverTick then return end
@@ -1507,6 +1717,7 @@ hotkeys = buildHotkeyController({
         [Enum.KeyCode.F1] = toggleFlight,
         [Enum.KeyCode.F2] = toggleHover,
         [Enum.KeyCode.F3] = toggleSkills,
+        [Enum.KeyCode.F4] = toggleAutoE,
     },
     blocked = function()
         return closed or not gameFocused() or GuiService.MenuIsOpen
@@ -1531,7 +1742,7 @@ slower.Activated:Connect(function() changeInterval(controller.state.interval - 0
 faster.Activated:Connect(function() changeInterval(controller.state.interval + 0.25) end)
 minimize.Activated:Connect(function()
     collapsed = not collapsed
-    skillTab.Visible, hoverTab.Visible, flightTab.Visible = not collapsed, not collapsed, not collapsed
+    skillTab.Visible, hoverTab.Visible, flightTab.Visible, autoETab.Visible = not collapsed, not collapsed, not collapsed, not collapsed
     showWindowPage(activePage)
     panel.Size = UDim2.fromOffset(340, collapsed and 43 or 460)
     minimize.Text = collapsed and "+" or "−"
@@ -1576,24 +1787,32 @@ table.insert(connections, UserInputService.WindowFocused:Connect(function()
 end))
 table.insert(connections, player.CharacterRemoving:Connect(function()
     controller.release()
+    if autoEController then autoEController.hidden(autoEController.state.held and autoEController.state.held.prompt) end
     stopFlight("ตัวละครหายไป • เปิดบินใหม่หลังเกิดครับ")
 end))
 local nextTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or os.clock() < nextTick then return end
     nextTick = os.clock() + 0.05
+    if autoEController.state.enabled then
+        local okE, errE = pcall(autoEController.step)
+        if not okE then autoEController.stop() warn("Auto E:", errE) end
+    end
     local ok, err = pcall(controller.step)
     if not ok then controller.stop() warn("Auto Skill 123:", err) end
 end))
 session.stops = {
     hotkeys.clear,
     controller.dispose,
+    autoEController.stop,
     function() stopFlight("ปิดหน้าต่างแล้ว") end,
     function() if hoverController then hoverController.stop() end end,
     function()
         table.clear(hoverHumanoids)
         table.clear(hoverModels)
         table.clear(hoverBillboards)
+        table.clear(autoEPrompts)
+        table.clear(autoEVisible)
     end,
 }
 if closed then cleanupSession() end
