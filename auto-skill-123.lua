@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.6 — camera-relative flight with cleanup and mutually exclusive hover.
+-- Auto Skill + NPC Hover + Flight v1.7 — bounded actor indexing, cached rig geometry and 20 Hz hover updates.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -474,7 +474,7 @@ local hoverStatus = create("TextLabel", {
     BackgroundTransparency = 1, TextColor3 = color.muted,
     TextSize = 13, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "v1.5 • รองรับป้ายเลือดบนตัวมอน\nบอส IMMUNE: จัดการลูกน้องก่อน\nสแกน + ข้อมูล: คัดลอกข้อมูลไว้ตรวจตัวที่หาไม่เจอ",
+    Text = "v1.7 • สแกนเป็นชุดเล็ก ลดงานซ้ำ\nบอส IMMUNE: จัดการลูกน้องก่อน\nสแกน + ข้อมูล: คัดลอกข้อมูลไว้ตรวจตัวที่หาไม่เจอ",
 }, hoverPage)
 local flightPage = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
@@ -519,6 +519,7 @@ local flyStatus = create("TextLabel", {
 }, flightPage)
 
 local hoverHumanoids = {} -- Humanoid, AnimationController, or health-bearing enemy model candidates
+local hoverModels, modelCursor = {}, nil
 local rigCache = setmetatable({}, {__mode = "k"})
 local hoverScanStats = {}
 local function ownCharacter()
@@ -545,7 +546,7 @@ local function targetParts(model, humanoid)
     local cached = rigCache[model]
     if cached and bodyPart(cached.root, model) then
         local headOK = cached.head and cached.head:IsDescendantOf(model)
-        if headOK or os.clock() < cached.checkAt then return cached.root, headOK and cached.head or nil end
+        if not cached.dirty then return cached.root, headOK and cached.head or nil end
     end
     local root = humanoid and humanoid.RootPart
     if not bodyPart(root, model) then root = model:FindFirstChild("HumanoidRootPart", true) end
@@ -556,9 +557,11 @@ local function targetParts(model, humanoid)
             if bodyPart(candidate, model) then root = candidate break end
         end
     end
+    local descendants
     if not bodyPart(root, model) then
+        descendants = model:GetDescendants()
         local volume = -1
-        for _, object in ipairs(model:GetDescendants()) do
+        for _, object in ipairs(descendants) do
             if bodyPart(object, model) then
                 local size = object.Size
                 local v = size.X * size.Y * size.Z
@@ -567,16 +570,17 @@ local function targetParts(model, humanoid)
         end
     end
     if not bodyPart(root, model) then return nil end
-    local head
-    for _, object in ipairs(model:GetDescendants()) do
+    local head, body = nil, {}
+    descendants = descendants or model:GetDescendants()
+    for _, object in ipairs(descendants) do
+        if bodyPart(object, model) then body[#body + 1] = object end
         if object.Name == "Head" and not object:FindFirstAncestorOfClass("Tool")
             and not object:FindFirstAncestorOfClass("Accessory")
             and (object:IsA("BasePart") or object:IsA("Attachment")) then
-            head = object
-            break
+            head = head or object
         end
     end
-    rigCache[model] = {root = root, head = head, checkAt = os.clock() + 0.75, boundsAt = 0}
+    rigCache[model] = {root = root, head = head, body = body, boundsAt = 0, dirty = false}
     return root, head
 end
 local function enemyFolderHint(model)
@@ -651,14 +655,14 @@ local function readPlate(plate)
     local now = os.clock()
     local cached = plateCache[plate]
     if not cached then cached = {refreshAt = 0, readAt = 0} plateCache[plate] = cached end
-    if now >= cached.refreshAt then
+    if not cached.labels or cached.dirty then
         cached.labels = {}
         for _, object in ipairs(plate:GetDescendants()) do
             if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
                 cached.labels[#cached.labels + 1] = object
             end
         end
-        cached.refreshAt = now + 0.75
+        cached.dirty, cached.readAt = false, 0
     end
     if now < cached.readAt then return cached.snapshot end
     local snapshot = {texts = {}, immune = false}
@@ -736,26 +740,66 @@ local function resolveActor(control)
     end
     return nil
 end
+-- Map models are classified a few at a time; target scans only visit actual actor candidates.
+local function dirtyGeometry(object)
+    if object:IsA("BasePart") or object:IsA("Attachment") then
+        local model = object:FindFirstAncestorOfClass("Model")
+        for _ = 1, 4 do
+            if not model then break end
+            local cached = rigCache[model]
+            if cached then cached.dirty, cached.boundsAt = true, 0 end
+            model = model:FindFirstAncestorOfClass("Model")
+        end
+    elseif object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+        local plate = object:FindFirstAncestorOfClass("BillboardGui")
+        local cached = plate and plateCache[plate]
+        if cached then cached.dirty, cached.readAt = true, 0 end
+    end
+end
 local function trackHumanoid(object)
-    -- Include custom actors regardless of the name of their folder.
-    if object:IsA("Humanoid") or object:IsA("AnimationController") or object:IsA("Model") then
+    if object:IsA("Humanoid") or object:IsA("AnimationController") then
         hoverHumanoids[object] = true
+    elseif object:IsA("Model") then
+        hoverModels[object] = true
     elseif object:IsA("BillboardGui") then
         hoverBillboards[object] = true
     end
+    dirtyGeometry(object)
 end
 local function trackPlate(object)
     if object:IsA("BillboardGui") then hoverBillboards[object] = true end
+    dirtyGeometry(object)
 end
 local function untrack(object)
-    hoverHumanoids[object], hoverBillboards[object] = nil, nil
+    dirtyGeometry(object)
+    hoverHumanoids[object], hoverBillboards[object], hoverModels[object] = nil, nil, nil
+    rigCache[object], plateCache[object] = nil, nil
+    if modelCursor == object then modelCursor = nil end
+end
+local function refreshHoverModels()
+    local started = os.clock()
+    for _ = 1, 12 do
+        local model = next(hoverModels, modelCursor)
+        modelCursor = model
+        if not model then break end
+        local actor = resolveActor(model)
+        hoverHumanoids[model] = actor and true or nil
+        if os.clock() - started >= 0.001 then break end
+    end
 end
 table.insert(connections, workspace.DescendantAdded:Connect(trackHumanoid))
 table.insert(connections, workspace.DescendantRemoving:Connect(untrack))
 table.insert(connections, playerGui.DescendantAdded:Connect(trackPlate))
 table.insert(connections, playerGui.DescendantRemoving:Connect(untrack))
-for _, object in ipairs(workspace:GetDescendants()) do trackHumanoid(object) end
-for _, object in ipairs(playerGui:GetDescendants()) do trackPlate(object) end
+for _, object in ipairs(workspace:GetDescendants()) do
+    -- Bootstrap only indexes classes. Geometry invalidation is for later changes.
+    if object:IsA("Humanoid") or object:IsA("AnimationController") then hoverHumanoids[object] = true
+    elseif object:IsA("Model") then hoverModels[object] = true
+    elseif object:IsA("BillboardGui") then hoverBillboards[object] = true end
+end
+for _, object in ipairs(playerGui:GetDescendants()) do
+    if object:IsA("BillboardGui") then hoverBillboards[object] = true end
+end
 
 local function scanHoverTargets(radius, skipped)
     local _, _, root = ownCharacter()
@@ -801,10 +845,16 @@ local function scanHoverTargets(radius, skipped)
         end
     end
     for plate in pairs(hoverBillboards) do
-        local snapshot = readPlate(plate)
+        local model, anchor = plateActor(plate)
+        local near = model and not isPlayerModel(model)
+        if near then
+            local part = anchor:IsA("BasePart") and anchor or model.PrimaryPart
+            if part and (part.Position - root.Position).Magnitude > radius then near = false end
+        end
+        -- Do not parse nameplates for distant map decorations or other players.
+        local snapshot = near and readPlate(plate)
         if snapshot and snapshot.health ~= nil then
             hoverScanStats.plates = hoverScanStats.plates + 1
-            local model, anchor = plateActor(plate)
             if not model then
                 hoverScanStats.unmapped = hoverScanStats.unmapped + 1
             else
@@ -814,6 +864,8 @@ local function scanHoverTargets(radius, skipped)
                 source = source or {kind = "nameplate", object = plate, label = "Nameplate HP"}
                 include(model, humanoid, source, plate, snapshot)
             end
+        elseif not model then
+            hoverScanStats.unmapped = hoverScanStats.unmapped + 1
         end
     end
     for _, entry in pairs(byPart) do entries[#entries + 1] = entry end
@@ -847,7 +899,7 @@ local function destination(entry, height)
     local cached = rigCache[entry.model]
     if not cached.boundsOffset or os.clock() >= cached.boundsAt then
         local top = root.Position.Y + root.Size.Y * 0.5
-        for _, part in ipairs(entry.model:GetDescendants()) do
+        for _, part in ipairs(cached.body or {}) do
             if bodyPart(part, entry.model) then
                 local frame, size = part.CFrame, part.Size
                 local extent = math.abs(frame.RightVector.Y) * size.X * 0.5
@@ -865,7 +917,7 @@ local lastHoverInfoAt, hoverReportUntil = 0, 0
 local function buildHoverController(deps)
     local hover = {}
     local state = {enabled = false, target = nil, ready = false,
-        height = 6, radius = 250, nextScan = 0, placedSince = nil}
+        height = 6, radius = 250, nextScan = 0, placedSince = nil, nextInfo = 0}
     hover.state = state
     local skipped = setmetatable({}, {__mode = "k"})
     local function notify(message) deps.notify(state, message) end
@@ -954,7 +1006,10 @@ local function buildHoverController(deps)
         end
         state.placedSince = state.placedSince or deps.clock()
         state.ready = deps.clock() - state.placedSince >= 0.30
-        notify(deps.describe(state.target, state.ready))
+        if deps.clock() >= state.nextInfo then
+            state.nextInfo = deps.clock() + 0.25
+            notify(deps.describe(state.target, state.ready))
+        end
     end
     return hover
 end
@@ -1196,7 +1251,7 @@ local function hoverDiagnostic(entries)
     local _, _, root = ownCharacter()
     local nearby = {}
     if root then
-        for model in pairs(hoverHumanoids) do
+        for model in pairs(hoverModels) do
             if model:IsA("Model") and not isPlayerModel(model) then
                 -- Direct body parts only: do not traverse entire room/map container models.
                 local part = model.PrimaryPart
@@ -1250,6 +1305,7 @@ end
 
 hoverScan.Activated:Connect(function()
     setHoverConfig()
+    refreshHoverModels()
     local entries = hoverController.scan()
     local lines = {string.format("พบ %d ตัว • นอกระยะ %d • ไม่มีจุดอ้างอิง %d",
         #entries, hoverScanStats.outside or 0, hoverScanStats.noPart or 0)}
@@ -1279,9 +1335,14 @@ end
 skillTab.Activated:Connect(function() showWindowPage("skills") end)
 hoverTab.Activated:Connect(function() showWindowPage("hover") end)
 flightTab.Activated:Connect(function() showWindowPage("flight") end)
+local nextHoverTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
-    if closed or not hoverController.state.enabled then return end
-    local ok, err = pcall(hoverController.step)
+    if closed or not hoverController.state.enabled or os.clock() < nextHoverTick then return end
+    nextHoverTick = os.clock() + 0.05
+    local ok, err = pcall(function()
+        refreshHoverModels()
+        hoverController.step()
+    end)
     if not ok then
         hoverController.stop()
         hoverStatus.Text = "ยืนบนหัวหยุดเพราะ Error: " .. tostring(err):sub(1, 150)
@@ -1384,6 +1445,7 @@ gui.Destroying:Connect(function()
     stopFlight("ปิดหน้าต่างแล้ว")
     if hoverController then hoverController.stop() end
     table.clear(hoverHumanoids)
+    table.clear(hoverModels)
     table.clear(hoverBillboards)
     for _, connection in ipairs(connections) do connection:Disconnect() end
     table.clear(connections)
