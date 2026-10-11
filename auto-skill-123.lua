@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.10 — hold the flight position while casting skills.
+-- Auto Skill + NPC Hover + Flight v1.11 — classic flight response and held movement keys resume after casting.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -1174,8 +1174,7 @@ local function startFlight()
     velocity.Attachment0 = attachment
     velocity.RelativeTo = Enum.ActuatorRelativeTo.World
     velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-    velocity.ForceLimitsEnabled = true
-    velocity.MaxForce = math.max(root.AssemblyMass, 1) * math.max(workspace.Gravity, 1) * 4
+    velocity.ForceLimitsEnabled = false
     velocity.VectorVelocity = Vector3.zero
     velocity.Parent = root
     local orientation = own(Instance.new("AlignOrientation"))
@@ -1183,10 +1182,7 @@ local function startFlight()
     orientation.Name = "AutoSkillFlightOrientation"
     orientation.Attachment0 = attachment
     orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
-    orientation.RigidityEnabled = false
-    orientation.MaxTorque = math.max(root.AssemblyMass, 1) * 4000
-    orientation.MaxAngularVelocity = 8
-    orientation.Responsiveness = 20
+    orientation.RigidityEnabled = true
     orientation.CFrame = root.CFrame.Rotation
     orientation.Parent = root
     local support = own(Instance.new("VectorForce"))
@@ -1215,7 +1211,6 @@ local function captureFlightCast()
     local now = os.clock()
     if not f.casting and now >= f.castPendingUntil then f.castFrame = f.root.CFrame end
     f.castPendingUntil = now + 0.35
-    table.clear(flyPressed)
     f.velocity.VectorVelocity = Vector3.zero
 end
 session.captureFlightCast = captureFlightCast
@@ -1227,7 +1222,9 @@ local function stepFlight()
         stopFlight("หยุดบินแล้ว • เปิดใหม่เมื่อตัวละครพร้อมครับ")
         return
     end
-    local casting = os.clock() < f.castPendingUntil or f.root.Anchored or skillAnimationBusy(f.humanoid)
+    -- Only a captured skill key arms the cast lock; unrelated idle/action poses must not freeze flight.
+    local casting = os.clock() < f.castPendingUntil or f.root.Anchored
+        or (f.castFrame ~= nil and skillAnimationBusy(f.humanoid))
     if casting ~= f.casting then
         f.casting = casting
         f.velocity.Enabled, f.orientation.Enabled = not casting, not casting
@@ -1235,7 +1232,7 @@ local function stepFlight()
         else f.humanoid.PlatformStand = true end
         if casting then
             f.castFrame = f.castFrame or f.root.CFrame
-            clearFlightInput()
+            f.velocity.VectorVelocity = Vector3.zero
             flyStatus.Text = "ใช้สกิลอยู่ • ล็อกตำแหน่งเดิม\nสกิลจบแล้วบินต่อได้ • F1 ปิดบิน"
         else
             f.castFrame = nil
