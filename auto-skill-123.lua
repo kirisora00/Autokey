@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.13 — repeat Auto E with a cooldown while the prompt remains usable.
+-- Auto Skill + NPC Hover + Flight v1.14 — automatic Next Floor or Retry on the results screen.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -81,25 +81,31 @@ local close = create("TextButton", {
     Text = "X", TextColor3 = color.text, TextSize = 16,
 }, panel)
 local skillTab = create("TextButton", {
-    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(72, 31),
+    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(60, 31),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
-    Text = "Skill 1/2/3", TextColor3 = color.text, TextSize = 12,
+    Text = "Skill", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local hoverTab = create("TextButton", {
-    Position = UDim2.fromOffset(94, 49), Size = UDim2.fromOffset(72, 31),
+    Position = UDim2.fromOffset(77, 49), Size = UDim2.fromOffset(60, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "ยืนบนหัว", TextColor3 = color.text, TextSize = 12,
+    Text = "บนหัว", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local flightTab = create("TextButton", {
-    Position = UDim2.fromOffset(174, 49), Size = UDim2.fromOffset(72, 31),
+    Position = UDim2.fromOffset(140, 49), Size = UDim2.fromOffset(60, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "บิน / Flight", TextColor3 = color.text, TextSize = 12,
+    Text = "บิน", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local autoETab = create("TextButton", {
-    Position = UDim2.fromOffset(254, 49), Size = UDim2.fromOffset(72, 31),
+    Position = UDim2.fromOffset(203, 49), Size = UDim2.fromOffset(60, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "Auto E", TextColor3 = color.text, TextSize = 12,
 }, panel)
+local resultsTab = create("TextButton", {
+    Position = UDim2.fromOffset(266, 49), Size = UDim2.fromOffset(60, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "จบรอบ", TextColor3 = color.text, TextSize = 12,
+}, panel)
+local resultsPage
 local content = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
     BackgroundTransparency = 1,
@@ -166,12 +172,13 @@ local status = create("TextLabel", {
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 11,
-    Text = "F1 บิน • F2 บนหัว • F3 Skill • F4 Auto E",
+    Text = "F1 บิน • F2 หัว • F3 Skill • F4 E • F5 จบรอบ",
 }, panel)
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
-local hotkeys, autoEController
+local hotkeys, autoEController, resultsController
+local resultButtons = {}
 local autoEPrompts, autoEVisible, autoECursor = {}, {}, nil
 local session = {disposed = false}
 sessionEnv.AutokeySkill123Session = session
@@ -341,6 +348,9 @@ local function paused()
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not character or not humanoid or humanoid.Health <= 0 then
         return "พัก AUTO รอตัวละครเกิดใหม่"
+    end
+    if resultsController and resultsController.state.visible then
+        return "พักสกิลระหว่างหน้าจอจบรอบ"
     end
     if autoEController and autoEController.state.held then
         return "พักสกิลระหว่างกด E โต้ตอบ"
@@ -836,6 +846,8 @@ local function trackHumanoid(object)
     dirtyGeometry(object)
 end
 local function trackPlate(object)
+    if object:IsA("GuiButton") and not object:IsDescendantOf(gui) then resultButtons[object] = true end
+    if resultsController then resultsController.dirty(object) end
     if object:IsA("BillboardGui") then hoverBillboards[object] = true end
     dirtyGeometry(object)
 end
@@ -844,7 +856,8 @@ local function untrack(object)
     hoverHumanoids[object], hoverBillboards[object], hoverModels[object] = nil, nil, nil
     rigCache[object], plateCache[object] = nil, nil
     if modelCursor == object then modelCursor = nil end
-    autoEPrompts[object], autoEVisible[object] = nil, nil
+    autoEPrompts[object], autoEVisible[object], resultButtons[object] = nil, nil, nil
+    if resultsController then resultsController.dirty(object) end
     if autoECursor == object then autoECursor = nil end
 end
 local function refreshHoverModels()
@@ -871,6 +884,7 @@ for _, object in ipairs(workspace:GetDescendants()) do
 end
 for _, object in ipairs(playerGui:GetDescendants()) do
     if object:IsA("BillboardGui") then hoverBillboards[object] = true end
+    if object:IsA("GuiButton") and not object:IsDescendantOf(gui) then resultButtons[object] = true end
 end
 
 local function scanHoverTargets(radius, skipped)
@@ -1646,6 +1660,249 @@ table.insert(connections, ProximityPromptService.PromptTriggered:Connect(functio
 end))
 -- End Auto E.
 
+-- Results automation only looks for the game's visible Next Floor / Retry / Leave group.
+do
+    resultsPage = create("Frame", {
+        Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
+        BackgroundTransparency = 1, Visible = false,
+    }, panel)
+    create("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 60), BackgroundTransparency = 1,
+        Text = "กดปุ่มจบรอบให้อัตโนมัติ • F5 เปิด/ปิด\nเริ่มต้นเลือก Next Floor ปุ่มตรงกลาง",
+        TextColor3 = color.muted, TextSize = 14, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    }, resultsPage)
+    local nextButton = create("TextButton", {
+        Position = UDim2.fromOffset(0, 76), Size = UDim2.fromOffset(152, 36),
+        BackgroundColor3 = color.blue, BorderSizePixel = 0, Text = "Next Floor",
+        TextColor3 = color.text, TextSize = 14,
+    }, resultsPage)
+    local retryButton = create("TextButton", {
+        Position = UDim2.fromOffset(160, 76), Size = UDim2.fromOffset(152, 36),
+        BackgroundColor3 = color.button, BorderSizePixel = 0, Text = "Retry ชั้นเดิม",
+        TextColor3 = color.text, TextSize = 14,
+    }, resultsPage)
+    local enableButton = create("TextButton", {
+        Position = UDim2.fromOffset(0, 137), Size = UDim2.new(1, 0, 0, 44),
+        BackgroundColor3 = color.blue, BorderSizePixel = 0,
+        Text = "AUTO จบรอบ: OFF — กดเพื่อเริ่ม",
+        TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
+    }, resultsPage)
+    local info = create("TextLabel", {
+        Position = UDim2.fromOffset(0, 207), Size = UDim2.new(1, 0, 0, 130),
+        BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 14, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+        Text = "รอหน้าจอจบรอบ • ระบบเริ่มต้นปิดอยู่\nกดเฉพาะปุ่มที่เลือก ไม่กด Leave",
+    }, resultsPage)
+    local function buildResultsController(deps)
+        local state = {enabled = false, mode = "next", visible = false, target = nil,
+            since = 0, nextPoll = 0, lastClick = -math.huge, attempts = 0}
+        local auto = {state = state}
+        local function notify(message) deps.notify(state, message) end
+        local function resetTarget(button)
+            state.target, state.since, state.attempts, state.lastClick = button, deps.clock(), 0, -math.huge
+        end
+        function auto.stop()
+            state.enabled = false
+            deps.release()
+            notify("หยุด Auto จบรอบแล้ว")
+        end
+        function auto.start()
+            state.enabled, state.nextPoll = true, 0
+            resetTarget(nil)
+            notify("เปิด Auto จบรอบ • รอปุ่ม " .. (state.mode == "next" and "Next Floor" or "Retry"))
+        end
+        function auto.select(mode)
+            if mode ~= "next" and mode ~= "retry" then return end
+            deps.release()
+            state.mode, state.nextPoll = mode, 0
+            resetTarget(nil)
+            notify("เลือก " .. (mode == "next" and "Next Floor" or "Retry ชั้นเดิม") .. " แล้ว")
+        end
+        function auto.step()
+            if deps.clock() < state.nextPoll then return end
+            state.nextPoll = deps.clock() + 0.25
+            local button = deps.find(state.mode)
+            state.visible = button ~= nil
+            if button ~= state.target then resetTarget(button) end
+            if not state.enabled then return end
+            if not button then notify("รอหน้าจอจบรอบ...") return end
+            if deps.voted(button) then notify("ลงคะแนนแล้ว • รอเกมเริ่มรอบถัดไป") return end
+            local blocked = deps.blocked(button)
+            if blocked then notify(blocked) return end
+            if deps.clock() - state.since < 0.60 or deps.clock() - state.lastClick < 2 then return end
+            if state.attempts >= 1 then notify("ส่งคลิกแล้ว • รอเกมเริ่มรอบถัดไป") return end
+            state.attempts, state.lastClick = state.attempts + 1, deps.clock()
+            local ok, err = pcall(deps.click, button)
+            if not ok then
+                auto.stop()
+                notify("กดปุ่มไม่สำเร็จ: " .. tostring(err):sub(1, 120))
+                deps.error(err)
+            else
+                notify("ส่งคลิก " .. (state.mode == "next" and "Next Floor" or "Retry") .. " แล้ว • รอเกมตอบรับ")
+            end
+        end
+        function auto.toggle()
+            if state.enabled then auto.stop() else auto.start() end
+        end
+        return auto
+    end
+    local captionCache = setmetatable({}, {__mode = "k"})
+    local function normalizedText(text)
+        return tostring(text or ""):gsub("<[^>]*>", ""):lower():gsub("%s+", "")
+    end
+    local function caption(button)
+        local function actionText(text)
+            return text:match("^nextfloor") or text:match("^retry") or text == "leave"
+        end
+        local main, vote
+        if button:IsA("TextButton") then
+            local text = normalizedText(button.Text)
+            if actionText(text) then main = text end
+        end
+        if main and main:find("/", 1, true) then return main end
+        local labels = captionCache[button]
+        if not labels then
+            labels = {}
+            for _, object in ipairs(button:GetDescendants()) do
+                if object:IsA("TextLabel") then labels[#labels + 1] = object end
+            end
+            captionCache[button] = labels
+        end
+        for _, label in ipairs(labels) do
+            if label.Parent and label.Visible and label.Text ~= "" then
+                local text = normalizedText(label.Text)
+                if actionText(text) then main = main or text end
+                vote = vote or text:match("%d+/%d+")
+            end
+        end
+        main = main or normalizedText(button.Name)
+        if vote and not main:find("/", 1, true) then main = main .. ":" .. vote end
+        return main
+    end
+    local function visible(button)
+        if not button.Parent or not button:IsDescendantOf(playerGui) or button:IsDescendantOf(gui) then return false end
+        if button.AbsoluteSize.X <= 0 or button.AbsoluteSize.Y <= 0 then return false end
+        local object = button
+        while object and object ~= playerGui do
+            if object:IsA("GuiObject") and not object.Visible then return false end
+            if object:IsA("ScreenGui") and not object.Enabled then return false end
+            object = object.Parent
+        end
+        return true
+    end
+    local function classify(button)
+        local text = caption(button)
+        if text:match("^nextfloor") then return "next" end
+        if text:match("^retry") then return "retry" end
+        if text == "leave" then return "leave" end
+    end
+    local function findResult(mode)
+        local groups = {}
+        for button in pairs(resultButtons) do
+            if visible(button) then
+                local kind = classify(button)
+                local screen = button:FindFirstAncestorOfClass("ScreenGui")
+                if kind and screen then
+                    local group = groups[screen] or {}
+                    group[kind] = button
+                    groups[screen] = group
+                end
+            end
+        end
+        for _, group in pairs(groups) do
+            if group.next and group.retry and group.leave then return group[mode] end
+        end
+    end
+    local mouseTicket, manager, virtual
+    local function releaseMouse(ticket)
+        ticket = ticket or mouseTicket
+        if not ticket or mouseTicket ~= ticket then return end
+        local ok, err = pcall(ticket.send, false)
+        if ok then mouseTicket = nil else error(err, 0) end
+    end
+    local function clickResult(button)
+        if mouseTicket then releaseMouse() end
+        local active = true
+        pcall(function() active = button.Interactable end)
+        if active == false then error("ปุ่มยังไม่พร้อมให้กด") end
+        local position = button.AbsolutePosition + button.AbsoluteSize * 0.5
+        -- GUI coordinates use the inset viewport; virtual mouse input uses screen coordinates.
+        local inset = GuiService:GetGuiInset()
+        local screenPoint = position + inset
+        local found = false
+        for _, hit in ipairs(playerGui:GetGuiObjectsAtPosition(position.X, position.Y)) do
+            if hit == button or hit:IsDescendantOf(button) then found = true break end
+            if hit:IsA("GuiButton") or hit.Active then error("มีหน้าต่างอื่นบังปุ่มจบรอบ") end
+        end
+        if not found then error("ปุ่มยังไม่อยู่ในพื้นที่ที่คลิกได้") end
+        controller.release()
+        local ticket = {}
+        if router.mode() == "VirtualInput" then
+            virtual = virtual or UserInputService:CreateVirtualInput()
+            ticket.send = function(down)
+                virtual:SendMouseButton(screenPoint, Enum.UserInputType.MouseButton1, down, 0)
+            end
+        else
+            manager = manager or game:GetService("VirtualInputManager")
+            ticket.send = function(down)
+                manager:SendMouseButtonEvent(math.floor(screenPoint.X + 0.5), math.floor(screenPoint.Y + 0.5), 0, down, game, 0)
+            end
+        end
+        mouseTicket = ticket
+        local ok, err = pcall(ticket.send, true)
+        if not ok then pcall(releaseMouse, ticket) error(err, 0) end
+        task.delay(0.08, function()
+            if mouseTicket == ticket then
+                local released, releaseError = pcall(releaseMouse, ticket)
+                if not released then warn("Auto Results mouse release:", releaseError) end
+            end
+        end)
+    end
+    resultsController = buildResultsController({
+        clock = os.clock, find = findResult, click = clickResult, release = releaseMouse,
+        voted = function(button)
+            local current = caption(button):match(":(%d+)%s*/")
+            local maximum = caption(button):match(":%d+/(%d+)")
+            return current and maximum and tonumber(current) >= tonumber(maximum) and tonumber(maximum) > 0 or false
+        end,
+        blocked = function(button)
+            if closed or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
+                return "พักการกดจบรอบระหว่างพิมพ์หรือเปิดเมนู Roblox"
+            end
+            local active = true
+            pcall(function() active = button.Interactable end)
+            if active == false then return "รอปุ่มจบรอบพร้อมให้กด..." end
+        end,
+        notify = function(state, message)
+            if closed then return end
+            local text = state.enabled and "AUTO จบรอบ: ON — กดเพื่อหยุด" or "AUTO จบรอบ: OFF — กดเพื่อเริ่ม"
+            if enableButton.Text ~= text then enableButton.Text = text end
+            local background = state.enabled and color.green or color.blue
+            if enableButton.BackgroundColor3 ~= background then enableButton.BackgroundColor3 = background end
+            nextButton.BackgroundColor3 = state.mode == "next" and color.blue or color.button
+            retryButton.BackgroundColor3 = state.mode == "retry" and color.blue or color.button
+            if info.Text ~= message then info.Text = message end
+        end,
+        error = function(err) warn("Auto Results:", err) end,
+    })
+    function resultsController.dirty(object)
+        if object:IsA("GuiButton") then captionCache[object] = nil return end
+        if object:IsA("TextLabel") then
+            local parent = object.Parent
+            for _ = 1, 6 do
+                if not parent then break end
+                if parent:IsA("GuiButton") then captionCache[parent] = nil break end
+                parent = parent.Parent
+            end
+        end
+    end
+    nextButton.Activated:Connect(function() resultsController.select("next") end)
+    retryButton.Activated:Connect(function() resultsController.select("retry") end)
+    enableButton.Activated:Connect(resultsController.toggle)
+end
+-- End results automation.
+
 local activePage = "skills"
 local function showWindowPage(name)
     activePage = name
@@ -1654,15 +1911,18 @@ local function showWindowPage(name)
     hoverPage.Visible = not collapsed and name == "hover"
     flightPage.Visible = not collapsed and name == "flight"
     autoEPage.Visible = not collapsed and name == "autoE"
+    resultsPage.Visible = not collapsed and name == "results"
     skillTab.BackgroundColor3 = name == "skills" and color.blue or color.button
     hoverTab.BackgroundColor3 = name == "hover" and color.blue or color.button
     flightTab.BackgroundColor3 = name == "flight" and color.blue or color.button
     autoETab.BackgroundColor3 = name == "autoE" and color.blue or color.button
+    resultsTab.BackgroundColor3 = name == "results" and color.blue or color.button
 end
 skillTab.Activated:Connect(function() showWindowPage("skills") end)
 hoverTab.Activated:Connect(function() showWindowPage("hover") end)
 flightTab.Activated:Connect(function() showWindowPage("flight") end)
 autoETab.Activated:Connect(function() showWindowPage("autoE") end)
+resultsTab.Activated:Connect(function() showWindowPage("results") end)
 local nextHoverTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or not hoverController.state.enabled or os.clock() < nextHoverTick then return end
@@ -1728,6 +1988,7 @@ hotkeys = buildHotkeyController({
         [Enum.KeyCode.F2] = toggleHover,
         [Enum.KeyCode.F3] = toggleSkills,
         [Enum.KeyCode.F4] = toggleAutoE,
+        [Enum.KeyCode.F5] = resultsController.toggle,
     },
     blocked = function()
         return closed or not gameFocused() or GuiService.MenuIsOpen
@@ -1752,7 +2013,7 @@ slower.Activated:Connect(function() changeInterval(controller.state.interval - 0
 faster.Activated:Connect(function() changeInterval(controller.state.interval + 0.25) end)
 minimize.Activated:Connect(function()
     collapsed = not collapsed
-    skillTab.Visible, hoverTab.Visible, flightTab.Visible, autoETab.Visible = not collapsed, not collapsed, not collapsed, not collapsed
+    skillTab.Visible, hoverTab.Visible, flightTab.Visible, autoETab.Visible, resultsTab.Visible = not collapsed, not collapsed, not collapsed, not collapsed, not collapsed
     showWindowPage(activePage)
     panel.Size = UDim2.fromOffset(340, collapsed and 43 or 460)
     minimize.Text = collapsed and "+" or "−"
@@ -1804,6 +2065,8 @@ local nextTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or os.clock() < nextTick then return end
     nextTick = os.clock() + 0.05
+    local okResult, errResult = pcall(resultsController.step)
+    if not okResult then resultsController.stop() warn("Auto Results:", errResult) end
     if autoEController.state.enabled then
         local okE, errE = pcall(autoEController.step)
         if not okE then autoEController.stop() warn("Auto E:", errE) end
@@ -1815,6 +2078,7 @@ session.stops = {
     hotkeys.clear,
     controller.dispose,
     autoEController.stop,
+    resultsController.stop,
     function() stopFlight("ปิดหน้าต่างแล้ว") end,
     function() if hoverController then hoverController.stop() end end,
     function()
@@ -1823,6 +2087,7 @@ session.stops = {
         table.clear(hoverBillboards)
         table.clear(autoEPrompts)
         table.clear(autoEVisible)
+        table.clear(resultButtons)
     end,
 }
 if closed then cleanupSession() end
