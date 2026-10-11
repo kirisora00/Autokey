@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.12 — Auto E for nearby visible proximity prompts.
+-- Auto Skill + NPC Hover + Flight v1.13 — repeat Auto E with a cooldown while the prompt remains usable.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -1451,7 +1451,7 @@ local autoEPage = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 110), BackgroundTransparency = 1,
-    Text = "เดินเข้าใกล้จุดที่ขึ้นปุ่ม E แล้วกดให้อัตโนมัติ\nรองรับกดค้างตามเวลาของจุดนั้น\nกดครั้งเดียวต่อจุด จนเดินออกแล้วกลับมาใหม่\nพักระหว่างพิมพ์หรือเปิดเมนู Roblox",
+    Text = "เดินเข้าใกล้จุดที่ขึ้นปุ่ม E แล้วกดให้อัตโนมัติ\nรองรับกดค้างตามเวลาของจุดนั้น\nกดซ้ำทุก 1 วินาที ถ้ายังอยู่ใกล้และจุดนั้นพร้อม\nพักระหว่างพิมพ์หรือเปิดเมนู Roblox",
     TextColor3 = color.muted, TextSize = 14, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
 }, autoEPage)
@@ -1470,12 +1470,14 @@ local autoEStatus = create("TextLabel", {
 local function buildAutoEController(deps)
     local state = {enabled = false, held = nil, count = 0, nextScan = 0}
     local done = setmetatable({}, {__mode = "k"})
+    local confirmed = setmetatable({}, {__mode = "k"})
     local auto = {state = state}
     local function notify(message) deps.notify(state, message) end
     local function release()
         local ticket = state.held
         state.held = nil
         if ticket then
+            done[ticket.prompt] = deps.clock() + 1
             local ok, err = pcall(deps.finish, ticket.prompt)
             if not ok then deps.error(err) end
         end
@@ -1488,6 +1490,7 @@ local function buildAutoEController(deps)
     function auto.start()
         release()
         done = setmetatable({}, {__mode = "k"})
+        confirmed = setmetatable({}, {__mode = "k"})
         state.enabled, state.nextScan = true, 0
         notify("AUTO E เปิดอยู่ • เดินเข้าใกล้จุดที่ขึ้น E ได้เลย")
     end
@@ -1496,22 +1499,28 @@ local function buildAutoEController(deps)
     end
     function auto.triggered(prompt)
         if not state.enabled then return end
-        if not done[prompt] or done[prompt] ~= "confirmed" then
+        if not confirmed[prompt] then
             state.count = state.count + 1
         end
-        done[prompt] = "confirmed"
+        confirmed[prompt] = true
+        done[prompt] = deps.clock() + 1
         if state.held and state.held.prompt == prompt then release() end
         notify("โต้ตอบแล้ว: " .. deps.name(prompt) .. " • รวม " .. state.count .. " ครั้ง")
     end
     function auto.step()
         if not state.enabled then return end
-        for prompt in pairs(done) do if not deps.inRange(prompt) then done[prompt] = nil end end
+        for prompt, untilAt in pairs(done) do
+            if not deps.inRange(prompt) or (deps.clock() >= untilAt
+                and not (state.held and state.held.prompt == prompt)) then
+                done[prompt], confirmed[prompt] = nil, nil
+            end
+        end
         local reason = deps.blocked()
         if reason then
             if state.held then
                 local prompt = state.held.prompt
                 release()
-                if done[prompt] ~= "confirmed" then done[prompt] = nil end
+                if not confirmed[prompt] then done[prompt] = nil end
             end
             notify(reason)
             return
@@ -1522,7 +1531,7 @@ local function buildAutoEController(deps)
                 release()
             elseif deps.clock() >= ticket.untilAt then
                 release()
-                notify("กด E แล้ว • รอเดินออกจากจุดก่อนกดอีกครั้ง")
+                notify("กด E แล้ว • รอ 1 วินาทีก่อนรอบถัดไป")
             end
             return
         end
@@ -1537,13 +1546,14 @@ local function buildAutoEController(deps)
                 end
             end
         end
-        if not nearest then notify("รอเข้าใกล้จุดโต้ตอบที่ใช้ E • รวม " .. state.count .. " ครั้ง") return end
-        done[nearest] = "attempted"
+        if not nearest then notify("รอจุด E พร้อมใช้งาน/รอรอบถัดไป • รวม " .. state.count .. " ครั้ง") return end
+        done[nearest], confirmed[nearest] = math.huge, nil
         state.held = {prompt = nearest, untilAt = deps.clock() + math.max(0, deps.duration(nearest)) + 0.10}
         deps.releaseSkills()
         local ok, err = pcall(deps.begin, nearest)
         if not ok then
             release()
+            done[nearest] = deps.clock() + 5
             notify("กด E ไม่สำเร็จ • ดู Error ใน Console")
             deps.error(err)
         elseif state.held then
