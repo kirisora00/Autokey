@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.20 — combat-only following, live enemyBar health and empty-wave waiting.
+-- Auto Skill + NPC Hover + Flight v1.21 — verified rubble hitboxes, safe AREA destinations and confirmed room entry.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -888,7 +888,7 @@ end
 local function trackRouteObject(object)
     if object:IsA("Model") or object:IsA("BasePart") or object:IsA("Attachment") then
         local name = object.Name:lower():gsub("[%s_%-]", "")
-        if name:find("rubble", 1, true) or name:match("^area%d") then routeObjects[object] = true end
+        if name:find("rubble", 1, true) or name:find("area", 1, true) then routeObjects[object] = true end
     end
 end
 local function trackHumanoid(object)
@@ -2278,7 +2278,7 @@ do
     }, routePage)
     local function buildProgressController(deps)
         local state = {enabled = false, busy = false, phase = "idle", target = nil,
-            nextTick = 0, nextAttack = 0, enteredAt = 0, restore = nil}
+            nextTick = 0, nextAttack = 0, enteredAt = 0, restore = nil, entryAttempts = 0}
         local auto = {state = state}
         local function notify(message) deps.notify(state, message) end
         local function finish(resume)
@@ -2351,7 +2351,14 @@ do
             elseif phase == "area" then
                 deps.release()
                 if state.phase == "entered" and (not area or state.target.area == area) then
-                    notify("ถึงจุด AREA แล้ว • รอเกมเริ่มห้องถัดไป")
+                    if deps.clock() - state.enteredAt < 2 then notify("กำลังเข้าวง AREA • รอเกมยืนยัน") return end
+                    local marker = deps.marker(area)
+                    if not marker then notify("ยังไม่เข้าห้อง • รอหาตำแหน่งวง AREA ใหม่") return end
+                    if deps.motionReady and not deps.motionReady() then return end
+                    state.target, state.enteredAt = marker, deps.clock()
+                    state.entryAttempts = state.entryAttempts + 1
+                    deps.enter(marker)
+                    notify("เกมยังให้เข้า AREA • ลองเข้าวงอีกครั้ง " .. state.entryAttempts)
                     return
                 end
                 local marker = deps.marker(area)
@@ -2361,9 +2368,9 @@ do
                 end
                 own()
                 if deps.motionReady and not deps.motionReady() then notify("รอท่าตีจบก่อนเข้าจุด AREA") return end
-                state.phase, state.target, state.enteredAt = "entered", marker, deps.clock()
+                state.phase, state.target, state.enteredAt, state.entryAttempts = "entered", marker, deps.clock(), 1
                 deps.enter(marker)
-                notify("วาร์ปถึง AREA " .. tostring(marker.area or area or "") .. " แล้ว • รอห้องถัดไป")
+                notify("กำลังเข้าวง AREA " .. tostring(marker.area or area or "") .. " • รอข้อความห้องเปลี่ยน")
             else
                 if state.busy then finish(true) end
                 notify("รอจัดการมอน / ข้อความทางผ่านของห้องถัดไป")
@@ -2390,6 +2397,15 @@ do
         if area then return "area", tonumber(area) end
     end
     local function objective()
+        local hud = playerGui:FindFirstChild("RoundHUD")
+        local container = hud and hud:FindFirstChild("Container")
+        local top = container and container:FindFirstChild("TopPart")
+        local remaining = top and top:FindFirstChild("RemainingFrame")
+        local label = remaining and remaining:FindFirstChild("EnemyCount")
+        if label and shown(label) then
+            objectiveLabel = label
+            return parseObjective(label.Text)
+        end
         if resultsController and resultsController.state.visible then return "end" end
         if objectiveLabel and shown(objectiveLabel) then return parseObjective(objectiveLabel.Text) end
         if os.clock() < objectiveNext then return objectivePhase, objectiveArea end
@@ -2424,14 +2440,115 @@ do
         if not snapshot then return "" end
         return table.concat(snapshot.texts, " "), snapshot
     end
+    local function safeAreaObject(object)
+        if not worldPosition(object) then return false end
+        local cursor = object
+        while cursor and cursor ~= workspace do
+            if cursor.Name:lower() == "tpback" then return false end
+            cursor = cursor.Parent
+        end
+        local _, _, root = ownCharacter()
+        return root and math.abs(worldPosition(object).Y - root.Position.Y) <= 80
+    end
+    local function ground(point, exclude)
+        local character = player.Character
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {character}
+        if exclude then params.FilterDescendantsInstances = {character, exclude} end
+        params.RespectCanCollide = true
+        local hit = workspace:Raycast(point + Vector3.new(0, 16, 0), Vector3.new(0, -100, 0), params)
+        return hit and hit.Position or nil
+    end
+    local previousGoal, previousArea
+    local function rayDistancePoint(origin, direction, playerPosition, distance, prior)
+        local offset = origin - playerPosition
+        local a = direction:Dot(direction)
+        local b = 2 * offset:Dot(direction)
+        local c = offset:Dot(offset) - distance * distance
+        local discriminant = b * b - 4 * a * c
+        if a <= 0 or discriminant < 0 then return nil end
+        local root = math.sqrt(discriminant)
+        local near, far = (-b - root) / (2 * a), (-b + root) / (2 * a)
+        local first = near > 0 and origin + direction * near or nil
+        local second = far > 0 and origin + direction * far or nil
+        if prior and first and second then
+            return (first - prior).Magnitude < (second - prior).Magnitude and first or second
+        end
+        return second or first
+    end
+    local function chipMarker(requestedArea)
+        local chip = playerGui:FindFirstChild("NextAreaChip")
+        local frame = chip and chip:FindFirstChild("Frame")
+        local title = frame and frame:FindFirstChild("Title")
+        if not frame or not title or not shown(title) then return nil end
+        local area = tonumber(cleanPlateText(title.Text):upper():match("AREA%s*(%d+)"))
+        if requestedArea and area ~= requestedArea then return nil end
+        local descendants = chip:GetDescendants()
+        -- Prefer an actual world instance referenced by the indicator.
+        for _, child in ipairs(descendants) do
+            if child:IsA("ObjectValue") and child.Value and safeAreaObject(child.Value) then
+                return {object = child.Value, position = worldPosition(child.Value), area = area, label = "NextAreaChip reference"}
+            end
+        end
+        local distance
+        for _, child in ipairs(descendants) do
+            if child:IsA("TextLabel") or child:IsA("TextButton") then
+                local text = cleanPlateText(child.Text):lower()
+                local number = text:match("(%d+%.?%d*)%s*stud")
+                if number then distance = tonumber(number) break end
+            end
+        end
+        local _, _, root = ownCharacter()
+        local camera = workspace.CurrentCamera
+        if not distance or not root or not camera then return nil end
+        if area ~= previousArea then previousGoal, previousArea = nil, area end
+        if distance <= 6 and previousGoal then
+            return {position = previousGoal, area = area, estimated = true, label = "NextAreaChip projected ground"}
+        end
+        -- The UI's anchor is the projected marker. Distance constrains its world position.
+        local pixel = frame.AbsolutePosition + Vector2.new(frame.AbsoluteSize.X * frame.AnchorPoint.X,
+            frame.AbsoluteSize.Y * frame.AnchorPoint.Y)
+        local ray = camera:ScreenPointToRay(pixel.X, pixel.Y, 0)
+        local position = rayDistancePoint(ray.Origin, ray.Direction, root.Position, distance + 0.5, previousGoal)
+        if not position or math.abs(position.Y - root.Position.Y) > math.max(8, distance * 0.3) then return nil end
+        local floor = ground(position)
+        if not floor then return nil end
+        previousGoal = floor
+        return {position = floor, area = area, estimated = true, label = "NextAreaChip projected ground"}
+    end
+
     local function nearest(kind, requestedArea)
         local _, _, root = ownCharacter()
         if not root then return nil end
+        local projectedMarker
+        if kind == "area" then
+            local chip = chipMarker(requestedArea)
+            if chip and not chip.estimated then return chip end
+            projectedMarker = chip
+        end
+        if kind == "rubble" then
+            local bar = playerGui:FindFirstChild("RubbleBar")
+            local text, snapshot = bar and plateText(bar) or "", nil
+            if bar then text, snapshot = plateText(bar) end
+            local anchor = bar and plateAnchor(bar)
+            if anchor then
+                if text:lower():find("locked", 1, true) then return nil end
+                local blocker = anchor:IsA("Attachment") and anchor.Parent or anchor
+                local border = blocker:FindFirstAncestorOfClass("Model")
+                local health = border and border:GetAttribute("RubbleHealth")
+                if type(health) == "number" then
+                    if health <= 0 then return nil end
+                    return {object = blocker, border = border, source = {kind = "attribute", object = border,
+                        field = "RubbleHealth", label = "RubbleHealth"}, label = text, position = worldPosition(blocker)}
+                end
+            end
+        end
         local best, bestDistance
         local function add(object, source, area, label)
             local position = worldPosition(object)
             if not position or isPlayerModel(object) then return end
-            if kind == "area" and requestedArea and area ~= requestedArea then return end
+            if kind == "area" and (not safeAreaObject(object) or (requestedArea and area ~= requestedArea)) then return end
             if source and sourceHealth(source) <= 0 then return end
             local distance = (position - root.Position).Magnitude
             if distance > 1500 then return end
@@ -2444,7 +2561,7 @@ do
             local text, snapshot = plateText(plate)
             local lower = text:lower()
             local anchor = plateAnchor(plate)
-            if anchor and kind == "rubble" and lower:find("rubble", 1, true) and snapshot.health ~= nil then
+            if anchor and kind == "rubble" and lower:find("rubble", 1, true) and not lower:find("locked", 1, true) and snapshot.health ~= nil then
                 add(anchor, {kind = "nameplate", object = plate, label = "Rubble HP"}, nil, text)
             elseif anchor and kind == "area" then
                 local area = text:upper():match("AREA%s*(%d+)")
@@ -2466,7 +2583,7 @@ do
                 end
             end
         end
-        return best
+        return best or projectedMarker
     end
     local mouseTicket, manager, virtual
     local function releaseMouse()
@@ -2530,7 +2647,9 @@ do
         end
         local bottom = center.Y - (size and size.Y * 0.5 or 0)
         local height = humanoid.HipHeight + root.Size.Y * 0.5
-        local point = Vector3.new(center.X, bottom + height, center.Z) + direction * (extent + 4)
+        local point = Vector3.new(center.X, bottom + height, center.Z) + direction * (extent + 3)
+        local floor = ground(Vector3.new(point.X, root.Position.Y, point.Z), target.border or object)
+        if floor then point = floor + Vector3.new(0, height, 0) end
         root.CFrame = CFrame.lookAt(point, Vector3.new(center.X, point.Y, center.Z))
         local camera = workspace.CurrentCamera
         if camera and camera.CameraType ~= Enum.CameraType.Scriptable then
@@ -2540,13 +2659,21 @@ do
     end
     local function enter(marker)
         local _, humanoid, root = ownCharacter()
-        local point = worldPosition(marker.object)
+        local point = marker.object and worldPosition(marker.object) or marker.position
         if not root or not point then error("ตำแหน่ง AREA หายไป") end
-        local destination = point + Vector3.new(0, humanoid.HipHeight + root.Size.Y * 0.5, 0)
-        root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
+        if marker.object and not safeAreaObject(marker.object) then error("ปฏิเสธจุด TpBack/จุดที่ไม่ใช่วงบนแผนที่") end
+        local floor = ground(point)
+        if not floor then error("ไม่พบพื้นบริเวณวง AREA • กดสแกนส่งข้อมูลได้ครับ") end
+        local height = humanoid.HipHeight + root.Size.Y * 0.5
+        local direction = Vector3.new(floor.X - root.Position.X, 0, floor.Z - root.Position.Z)
+        if direction.Magnitude < 0.01 then direction = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z) end
+        if direction.Magnitude < 0.01 then direction = Vector3.new(0, 0, -1) end
+        direction = direction.Unit
+        -- Arrive just before the ring and physically walk across it to trigger room entry.
+        local start = floor - direction * 4 + Vector3.new(0, height, 0)
+        root.CFrame = CFrame.lookAt(start, start + direction)
         root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
-        -- A small normal walk after arrival allows movement-triggered room zones to activate.
-        humanoid:MoveTo(destination + Vector3.new(0, 0, -2))
+        humanoid:MoveTo(floor + direction * 3 + Vector3.new(0, height, 0))
     end
     local infoUntil = 0
     progressController = buildProgressController({
@@ -2586,11 +2713,26 @@ do
     scan.Activated:Connect(function()
         local phase, area = objective()
         local rubble, marker = nearest("rubble"), nearest("area", area)
-        local lines = {"Rubble / AREA scan v1.18", "Objective: " .. tostring(phase) .. " area=" .. tostring(area),
+        local lines = {"Rubble / AREA scan v1.21", "Objective: " .. tostring(phase) .. " area=" .. tostring(area),
             "Objective label: " .. (objectiveLabel and objectiveLabel:GetFullName() or "none")}
         for _, item in ipairs({{name = "Rubble", target = rubble}, {name = "AREA", target = marker}}) do
             local t = item.target
-            lines[#lines + 1] = item.name .. ": " .. (t and t.object:GetFullName() or "not located")
+            lines[#lines + 1] = item.name .. ": " .. (t and (t.object and t.object:GetFullName() or t.label) or "not located")
+            if t then lines[#lines + 1] = "  point=" .. tostring(t.position) .. " estimated=" .. tostring(t.estimated) end
+        end
+        local _, humanoid, root = ownCharacter()
+        lines[#lines + 1] = "Route phase=" .. progressController.state.phase ..
+            " root=" .. tostring(root and root.Position) .. " anchored=" .. tostring(root and root.Anchored) ..
+            " animationBusy=" .. tostring(humanoid and skillAnimationBusy(humanoid))
+        local chip = playerGui:FindFirstChild("NextAreaChip")
+        if chip then
+            lines[#lines + 1] = "NextAreaChip class=" .. chip.ClassName
+            for _, child in ipairs(chip:GetDescendants()) do
+                if child:IsA("TextLabel") or child:IsA("ObjectValue") then
+                    lines[#lines + 1] = "CHIP " .. child:GetFullName() .. " | " ..
+                        (child:IsA("TextLabel") and child.Text or tostring(child.Value))
+                end
+            end
         end
         local count = 0
         for plate in pairs(hoverBillboards) do
