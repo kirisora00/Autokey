@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.18 — rubble breaking and glowing AREA progression.
+-- Auto Skill + NPC Hover + Flight v1.19 — follow enemies above, in front or behind with adjustable spacing.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -88,7 +88,7 @@ local skillTab = create("TextButton", {
 local hoverTab = create("TextButton", {
     Position = UDim2.fromOffset(66, 49), Size = UDim2.fromOffset(49, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "บนหัว", TextColor3 = color.text, TextSize = 12,
+    Text = "ตามมอน", TextColor3 = color.text, TextSize = 11,
 }, panel)
 local flightTab = create("TextButton", {
     Position = UDim2.fromOffset(118, 49), Size = UDim2.fromOffset(49, 31),
@@ -177,7 +177,7 @@ local status = create("TextLabel", {
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 10,
-    Text = "F1 บิน • F2 หัว • F3 Skill • F4 E • F5 รอบ • F6 ทาง",
+    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง",
 }, panel)
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
@@ -368,7 +368,7 @@ local function paused()
         return "รอแอนิเมชันสกิลจบก่อนกดตัวถัดไป"
     end
     if hoverController and hoverController.state.enabled and not hoverController.readyForSkills() then
-        return "พักสกิล • รอมอนเกิดหรือรอไปอยู่เหนือหัวมอน"
+        return "พักสกิล • รอมอนเกิดหรือรอถึงตำแหน่งที่เลือก"
     end
 end
 
@@ -514,53 +514,69 @@ local hoverPage = create("Frame", {
     BackgroundTransparency = 1, Visible = false,
 }, panel)
 create("TextLabel", {
-    Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1,
-    Text = "หาตัวใกล้สุดโดยไม่ต้องรู้ชื่อ • ตามเหนือหัวจนตาย\nถ้ายังไม่มีมอน จะปล่อยให้เดินเข้าจุด Spawn ต่อได้",
-    TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
-    TextXAlignment = Enum.TextXAlignment.Left,
+    Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
+    Text = "เลือกตำแหน่งตามมอน • หันหน้าเข้าหามอน",
+    TextColor3 = color.muted, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, hoverPage)
+local hoverPositionButtons = {}
+for index, option in ipairs({{key = "head", label = "บนหัว"}, {key = "front", label = "ด้านหน้า"}, {key = "back", label = "ด้านหลัง"}}) do
+    hoverPositionButtons[option.key] = create("TextButton", {
+        Position = UDim2.fromOffset((index - 1) * 106, 26), Size = UDim2.fromOffset(100, 30),
+        BackgroundColor3 = index == 1 and color.blue or color.button, BorderSizePixel = 0,
+        Text = option.label, TextColor3 = color.text, TextSize = 14,
+    }, hoverPage)
+end
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 57), Size = UDim2.fromOffset(205, 31),
-    BackgroundTransparency = 1, Text = "ความสูงเหนือหัว (studs)",
-    TextColor3 = color.muted, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(0, 64), Size = UDim2.fromOffset(205, 29),
+    BackgroundTransparency = 1, Text = "ความสูงบนหัว (studs)",
+    TextColor3 = color.muted, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
 }, hoverPage)
 local hoverHeight = create("TextBox", {
-    Position = UDim2.new(1, -91, 0, 57), Size = UDim2.fromOffset(91, 31),
+    Position = UDim2.new(1, -91, 0, 64), Size = UDim2.fromOffset(91, 29),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "6", TextColor3 = color.text, TextSize = 16, ClearTextOnFocus = false,
+    Text = "6", TextColor3 = color.text, TextSize = 15, ClearTextOnFocus = false,
 }, hoverPage)
 create("TextLabel", {
-    Position = UDim2.fromOffset(0, 98), Size = UDim2.fromOffset(205, 31),
+    Position = UDim2.fromOffset(0, 102), Size = UDim2.fromOffset(205, 29),
+    BackgroundTransparency = 1, Text = "ระยะหน้า / หลัง (studs)",
+    TextColor3 = color.muted, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+}, hoverPage)
+local hoverSpacing = create("TextBox", {
+    Position = UDim2.new(1, -91, 0, 102), Size = UDim2.fromOffset(91, 29),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "6", TextColor3 = color.muted, TextSize = 15, ClearTextOnFocus = false, TextEditable = false,
+}, hoverPage)
+create("TextLabel", {
+    Position = UDim2.fromOffset(0, 140), Size = UDim2.fromOffset(205, 29),
     BackgroundTransparency = 1, Text = "ระยะค้นหามอน (studs)",
-    TextColor3 = color.muted, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+    TextColor3 = color.muted, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
 }, hoverPage)
 local hoverRadius = create("TextBox", {
-    Position = UDim2.new(1, -91, 0, 98), Size = UDim2.fromOffset(91, 31),
+    Position = UDim2.new(1, -91, 0, 140), Size = UDim2.fromOffset(91, 29),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "250", TextColor3 = color.text, TextSize = 16, ClearTextOnFocus = false,
+    Text = "250", TextColor3 = color.text, TextSize = 15, ClearTextOnFocus = false,
 }, hoverPage)
 local hoverToggle = create("TextButton", {
-    Position = UDim2.fromOffset(0, 142), Size = UDim2.new(1, 0, 0, 41),
+    Position = UDim2.fromOffset(0, 180), Size = UDim2.new(1, 0, 0, 40),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
-    Text = "ยืนบนหัว: OFF — กดเพื่อเริ่ม", TextColor3 = color.text,
+    Text = "ตามมอน: OFF — กดเพื่อเริ่ม", TextColor3 = color.text,
     Font = Enum.Font.GothamBold, TextSize = 16,
 }, hoverPage)
 local hoverNext = create("TextButton", {
-    Position = UDim2.fromOffset(0, 191), Size = UDim2.fromOffset(152, 31),
+    Position = UDim2.fromOffset(0, 228), Size = UDim2.fromOffset(152, 29),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "เลือกเป้าถัดไป", TextColor3 = color.text, TextSize = 13,
 }, hoverPage)
 local hoverScan = create("TextButton", {
-    Position = UDim2.fromOffset(160, 191), Size = UDim2.fromOffset(152, 31),
+    Position = UDim2.fromOffset(160, 228), Size = UDim2.fromOffset(152, 29),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "สแกน + ข้อมูล", TextColor3 = color.text, TextSize = 13,
 }, hoverPage)
 local hoverStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 236), Size = UDim2.new(1, 0, 0, 110),
-    BackgroundTransparency = 1, TextColor3 = color.muted,
-    TextSize = 13, TextWrapped = true,
+    Position = UDim2.fromOffset(0, 271), Size = UDim2.new(1, 0, 0, 75),
+    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 12, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "v1.7 • สแกนเป็นชุดเล็ก ลดงานซ้ำ\nบอส IMMUNE: จัดการลูกน้องก่อน\nสแกน + ข้อมูล: คัดลอกข้อมูลไว้ตรวจตัวที่หาไม่เจอ",
+    Text = "F2 เปิด/ปิดตามมอน • เลือกบนหัว/หน้า/หลัง\nระยะหน้า/หลังวัดจากขอบตัวมอน\nเปลี่ยนตำแหน่งได้ระหว่างเปิดอยู่",
 }, hoverPage)
 local flightPage = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
@@ -998,9 +1014,48 @@ local function targetAlive(entry)
     entry.part = part
     return true
 end
-local function destination(entry, height)
+local function destination(entry, height, mode, spacing)
     local root, head = targetParts(entry.model, entry.rigHumanoid)
     if not root then return nil end
+    if mode == "front" or mode == "back" then
+        local cached = rigCache[entry.model]
+        local look = root.CFrame.LookVector
+        local forward = Vector3.new(look.X, 0, look.Z)
+        if forward.Magnitude < 0.001 then
+            local right = root.CFrame.RightVector
+            forward = Vector3.new(right.Z, 0, -right.X)
+        end
+        forward = forward.Unit
+        if not cached.sideAt or os.clock() >= cached.sideAt then
+            local front, back, bottom = 0, 0, 0
+            local first = true
+            for _, part in ipairs(cached.body or {}) do
+                if bodyPart(part, entry.model) and (part == root or (part.Transparency or 0) < 0.95) then
+                    local frame, size = part.CFrame, part.Size
+                    local extent = math.abs(forward:Dot(frame.RightVector)) * size.X * 0.5
+                        + math.abs(forward:Dot(frame.UpVector)) * size.Y * 0.5
+                        + math.abs(forward:Dot(frame.LookVector)) * size.Z * 0.5
+                    local shift = (part.Position - root.Position):Dot(forward)
+                    front = math.max(front, shift + extent)
+                    back = math.max(back, extent - shift)
+                    local yExtent = math.abs(frame.RightVector.Y) * size.X * 0.5
+                        + math.abs(frame.UpVector.Y) * size.Y * 0.5
+                        + math.abs(frame.LookVector.Y) * size.Z * 0.5
+                    local floorOffset = part.Position.Y - yExtent - root.Position.Y
+                    if first or floorOffset < bottom then bottom = floorOffset end
+                    first = false
+                end
+            end
+            cached.frontExtent, cached.backExtent, cached.bottomOffset = front, back, bottom
+            cached.sideAt = os.clock() + 0.50
+        end
+        local _, humanoid, playerRoot = ownCharacter()
+        local playerHeight = (humanoid and humanoid.HipHeight or 0) + (playerRoot and playerRoot.Size.Y * 0.5 or 2)
+        local distance = (mode == "front" and cached.frontExtent or cached.backExtent) + (spacing or 6)
+        local sign = mode == "front" and 1 or -1
+        local point = root.Position + forward * (distance * sign)
+        return Vector3.new(point.X, root.Position.Y + cached.bottomOffset + playerHeight, point.Z)
+    end
     if head then
         if head:IsA("BasePart") then return head.Position + Vector3.new(0, head.Size.Y * 0.5 + height, 0) end
         return head.WorldPosition + Vector3.new(0, height, 0)
@@ -1027,7 +1082,7 @@ local lastHoverInfoAt, hoverReportUntil = 0, 0
 local function buildHoverController(deps)
     local hover = {}
     local state = {enabled = false, target = nil, ready = false,
-        height = 6, radius = 250, nextScan = 0, placedSince = nil, nextInfo = 0}
+        height = 6, radius = 250, nextScan = 0, placedSince = nil, nextInfo = 0, mode = "head", spacing = 6}
     hover.state = state
     local skipped = setmetatable({}, {__mode = "k"})
     local function notify(message) deps.notify(state, message) end
@@ -1038,7 +1093,7 @@ local function buildHoverController(deps)
         state.enabled = false
         clearTarget()
         deps.releaseSkills()
-        notify("หยุดยืนบนหัวแล้ว • เดินได้ตามปกติ")
+        notify("หยุดตามมอนแล้ว • เดินได้ตามปกติ")
     end
     function hover.start()
         state.enabled = true
@@ -1055,13 +1110,17 @@ local function buildHoverController(deps)
         deps.releaseSkills()
         notify("กำลังเลือกเป้าถัดไป • ข้ามตัวเดิมชั่วคราว 3 วินาที")
     end
-    function hover.configure(height, radius)
-        local oldHeight, oldRadius = state.height, state.radius
+    function hover.configure(height, radius, mode, spacing)
+        local oldHeight, oldRadius, oldMode, oldSpacing = state.height, state.radius, state.mode, state.spacing
         local h, r = tonumber(height), tonumber(radius)
         if h and h == h then state.height = math.max(3, math.min(50, h)) end
         if r and r == r then state.radius = math.max(20, math.min(600, r)) end
-        if state.height ~= oldHeight or state.radius ~= oldRadius then
-            state.ready, state.placedSince = false, nil
+        if mode == "head" or mode == "front" or mode == "back" then state.mode = mode end
+        local gap = tonumber(spacing)
+        if gap and gap == gap then state.spacing = math.max(2, math.min(50, gap)) end
+        if state.height ~= oldHeight or state.radius ~= oldRadius or state.mode ~= oldMode or state.spacing ~= oldSpacing then
+            state.ready, state.placedSince, state.nextInfo = false, nil, 0
+            deps.releaseSkills()
         end
     end
     function hover.suspendForRoute()
@@ -1071,7 +1130,7 @@ local function buildHoverController(deps)
     end
     function hover.readyForSkills()
         return state.enabled and state.ready and state.target ~= nil
-            and deps.alive(state.target) and deps.inPosition(state.target, state.height)
+            and deps.alive(state.target) and deps.inPosition(state.target, state.height, state.mode, state.spacing)
     end
     function hover.scan()
         return deps.scan(state.radius, skipped)
@@ -1112,7 +1171,7 @@ local function buildHoverController(deps)
             state.ready, state.placedSince = false, nil
         end
         local switched = state.placedSince == nil
-        local moved, message = deps.follow(state.target, state.height, switched)
+        local moved, message = deps.follow(state.target, state.height, switched, state.mode, state.spacing)
         if not moved then
             state.ready, state.placedSince = false, nil
             deps.releaseSkills()
@@ -1123,7 +1182,7 @@ local function buildHoverController(deps)
         state.ready = deps.clock() - state.placedSince >= 0.30
         if deps.clock() >= state.nextInfo then
             state.nextInfo = deps.clock() + 0.25
-            notify(deps.describe(state.target, state.ready))
+            notify(deps.describe(state.target, state.ready, state.mode))
         end
     end
     return hover
@@ -1138,14 +1197,14 @@ hoverController = buildHoverController({
         if humanoid.SeatPart then return false, "ลงจากที่นั่งก่อนครับ" end
         return true
     end,
-    inPosition = function(entry, height)
+    inPosition = function(entry, height, mode, spacing)
         local _, _, root = ownCharacter()
-        local point = destination(entry, height)
+        local point = destination(entry, height, mode, spacing)
         return root and point and (root.Position - point).Magnitude <= 8
     end,
-    follow = function(entry, height, switching)
+    follow = function(entry, height, switching, mode, spacing)
         local _, humanoid, root = ownCharacter()
-        local point = destination(entry, height)
+        local point = destination(entry, height, mode, spacing)
         if not root or not point then return false, "รอตำแหน่งมอนโหลด..." end
         if root.Anchored then return false, "รอเกมปลดล็อกตัวละครจากสกิล..." end
         if switching then
@@ -1161,19 +1220,32 @@ hoverController = buildHoverController({
                 end
             end
         end
-        root.CFrame = CFrame.new(point) * root.CFrame.Rotation
+        if mode == "front" or mode == "back" then
+            local aim = Vector3.new(entry.part.Position.X, point.Y, entry.part.Position.Z)
+            root.CFrame = CFrame.lookAt(point, aim)
+            if switching then
+                local camera = workspace.CurrentCamera
+                local direction = aim - point
+                if camera and camera.CameraType ~= Enum.CameraType.Scriptable and direction.Magnitude > 0.001 then
+                    camera.CFrame = CFrame.lookAt(point - direction.Unit * 12 + Vector3.new(0, 5, 0), entry.part.Position)
+                end
+            end
+        else
+            root.CFrame = CFrame.new(point) * root.CFrame.Rotation
+        end
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
         return true
     end,
-    describe = function(entry, ready)
-        return string.format("เป้า: %s\nHP: %.0f • %s\n%s",
-            entry.displayName or entry.model.Name, sourceHealth(entry.source),
-            ready and "อยู่เหนือหัวแล้ว" or "รอให้อยู่เหนือหัวนิ่งก่อนกดสกิล", entry.path)
+    describe = function(entry, ready, mode)
+        local position = mode == "front" and "ด้านหน้า" or (mode == "back" and "ด้านหลัง" or "บนหัว")
+        return string.format("เป้า: %s • %s\nHP: %.0f • %s\n%s",
+            entry.displayName or entry.model.Name, position, sourceHealth(entry.source),
+            ready and "ถึงตำแหน่งแล้ว" or "รอให้อยู่ในตำแหน่งก่อนกดสกิล", entry.path)
     end,
     notify = function(state, message)
         if closed then return end
-        local text = state.enabled and "ยืนบนหัว: ON — กดเพื่อหยุด" or "ยืนบนหัว: OFF — กดเพื่อเริ่ม"
+        local text = state.enabled and "ตามมอน: ON — กดเพื่อหยุด" or "ตามมอน: OFF — กดเพื่อเริ่ม"
         if hoverToggle.Text ~= text then hoverToggle.Text = text end
         hoverToggle.BackgroundColor3 = state.enabled and color.green or color.blue
         if (not state.enabled or os.clock() >= lastHoverInfoAt) and os.clock() >= hoverReportUntil then
@@ -1422,13 +1494,27 @@ table.insert(connections, RunService.RenderStepped:Connect(function()
 end))
 -- End flight logic.
 
-local function setHoverConfig()
-    hoverController.configure(hoverHeight.Text, hoverRadius.Text)
+local function setHoverConfig(mode)
+    if type(mode) ~= "string" then mode = hoverController.state.mode end
+    hoverController.configure(hoverHeight.Text, hoverRadius.Text, mode, hoverSpacing.Text)
     hoverHeight.Text = tostring(hoverController.state.height)
     hoverRadius.Text = tostring(hoverController.state.radius)
+    hoverSpacing.Text = tostring(hoverController.state.spacing)
+    local onHead = hoverController.state.mode == "head"
+    hoverHeight.TextEditable, hoverSpacing.TextEditable = onHead, not onHead
+    hoverHeight.TextColor3 = onHead and color.text or color.muted
+    hoverSpacing.TextColor3 = onHead and color.muted or color.text
+    for key, button in pairs(hoverPositionButtons) do
+        button.BackgroundColor3 = key == hoverController.state.mode and color.blue or color.button
+    end
 end
 hoverHeight.FocusLost:Connect(setHoverConfig)
 hoverRadius.FocusLost:Connect(setHoverConfig)
+hoverSpacing.FocusLost:Connect(setHoverConfig)
+for key, button in pairs(hoverPositionButtons) do
+    local selectedMode = key
+    button.Activated:Connect(function() setHoverConfig(selectedMode) end)
+end
 local function toggleHover()
     if progressController and progressController.state.busy then progressController.stop(false) end
     focused = true
