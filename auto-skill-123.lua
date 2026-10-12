@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.17 — fly through walls with saved character collision states.
+-- Auto Skill + NPC Hover + Flight v1.18 — rubble breaking and glowing AREA progression.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -81,31 +81,36 @@ local close = create("TextButton", {
     Text = "X", TextColor3 = color.text, TextSize = 16,
 }, panel)
 local skillTab = create("TextButton", {
-    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(60, 31),
+    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(49, 31),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
     Text = "Skill", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local hoverTab = create("TextButton", {
-    Position = UDim2.fromOffset(77, 49), Size = UDim2.fromOffset(60, 31),
+    Position = UDim2.fromOffset(66, 49), Size = UDim2.fromOffset(49, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "บนหัว", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local flightTab = create("TextButton", {
-    Position = UDim2.fromOffset(140, 49), Size = UDim2.fromOffset(60, 31),
+    Position = UDim2.fromOffset(118, 49), Size = UDim2.fromOffset(49, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "บิน", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local autoETab = create("TextButton", {
-    Position = UDim2.fromOffset(203, 49), Size = UDim2.fromOffset(60, 31),
+    Position = UDim2.fromOffset(170, 49), Size = UDim2.fromOffset(49, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "Auto E", TextColor3 = color.text, TextSize = 12,
 }, panel)
 local resultsTab = create("TextButton", {
-    Position = UDim2.fromOffset(266, 49), Size = UDim2.fromOffset(60, 31),
+    Position = UDim2.fromOffset(222, 49), Size = UDim2.fromOffset(49, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
     Text = "จบรอบ", TextColor3 = color.text, TextSize = 12,
 }, panel)
-local resultsPage
+local routeTab = create("TextButton", {
+    Position = UDim2.fromOffset(274, 49), Size = UDim2.fromOffset(49, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "หิน/ทาง", TextColor3 = color.text, TextSize = 11,
+}, panel)
+local resultsPage, routePage
 local content = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
     BackgroundTransparency = 1,
@@ -171,13 +176,14 @@ local status = create("TextLabel", {
 
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
-    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 11,
-    Text = "F1 บิน • F2 หัว • F3 Skill • F4 E • F5 จบรอบ",
+    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 10,
+    Text = "F1 บิน • F2 หัว • F3 Skill • F4 E • F5 รอบ • F6 ทาง",
 }, panel)
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
-local hotkeys, autoEController, resultsController
+local hotkeys, autoEController, resultsController, progressController
+local routeObjects = {}
 local resultButtons, resultLabels = {}, {}
 local autoEPrompts, autoEVisible, autoECursor = {}, {}, nil
 local session = {disposed = false}
@@ -348,6 +354,9 @@ local function paused()
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not character or not humanoid or humanoid.Health <= 0 then
         return "พัก AUTO รอตัวละครเกิดใหม่"
+    end
+    if progressController and progressController.state.busy then
+        return "พักสกิลระหว่างตีหิน/เข้าจุด AREA"
     end
     if resultsController and resultsController.state.visible then
         return "พักสกิลระหว่างหน้าจอจบรอบ"
@@ -833,7 +842,14 @@ local function dirtyGeometry(object)
         if cached then cached.dirty, cached.readAt = true, 0 end
     end
 end
+local function trackRouteObject(object)
+    if object:IsA("Model") or object:IsA("BasePart") or object:IsA("Attachment") then
+        local name = object.Name:lower():gsub("[%s_%-]", "")
+        if name:find("rubble", 1, true) or name:match("^area%d") then routeObjects[object] = true end
+    end
+end
 local function trackHumanoid(object)
+    trackRouteObject(object)
     if object:IsA("Humanoid") or object:IsA("AnimationController") then
         hoverHumanoids[object] = true
     elseif object:IsA("Model") then
@@ -862,6 +878,7 @@ local function untrack(object)
     autoEPrompts[object], autoEVisible[object], resultButtons[object], resultLabels[object] = nil, nil, nil, nil
     if resultsController then resultsController.dirty(object) end
     if autoECursor == object then autoECursor = nil end
+    routeObjects[object] = nil
 end
 local function refreshHoverModels()
     local started = os.clock()
@@ -880,6 +897,7 @@ table.insert(connections, playerGui.DescendantAdded:Connect(trackPlate))
 table.insert(connections, playerGui.DescendantRemoving:Connect(untrack))
 for _, object in ipairs(workspace:GetDescendants()) do
     -- Bootstrap only indexes classes. Geometry invalidation is for later changes.
+    trackRouteObject(object)
     if object:IsA("Humanoid") or object:IsA("AnimationController") then hoverHumanoids[object] = true
     elseif object:IsA("Model") then hoverModels[object] = true
     elseif object:IsA("BillboardGui") then hoverBillboards[object] = true
@@ -1045,6 +1063,11 @@ local function buildHoverController(deps)
         if state.height ~= oldHeight or state.radius ~= oldRadius then
             state.ready, state.placedSince = false, nil
         end
+    end
+    function hover.suspendForRoute()
+        clearTarget()
+        state.nextScan = 0
+        deps.releaseSkills()
     end
     function hover.readyForSkills()
         return state.enabled and state.ready and state.target ~= nil
@@ -1350,6 +1373,7 @@ local function stepFlight()
 end
 -- Flight event wiring.
 local function toggleFlight()
+    if progressController and progressController.state.busy then progressController.stop(false) end
     if flight then stopFlight() return end
     local ok, err = pcall(startFlight)
     if not ok then
@@ -1406,6 +1430,7 @@ end
 hoverHeight.FocusLost:Connect(setHoverConfig)
 hoverRadius.FocusLost:Connect(setHoverConfig)
 local function toggleHover()
+    if progressController and progressController.state.busy then progressController.stop(false) end
     focused = true
     if hoverController.state.enabled then
         hoverController.stop()
@@ -2096,6 +2121,387 @@ do
 end
 -- End results automation.
 
+-- Rubble / AREA progression. World labels and linked instances are required for a destination.
+do
+    routePage = create("Frame", {
+        Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
+        BackgroundTransparency = 1, Visible = false,
+    }, panel)
+    create("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 85), BackgroundTransparency = 1,
+        Text = "จัดการมอน → วาร์ปหน้าหิน → คลิกซ้ายจนแตก\nหินแตก → วาร์ปไปจุด AREA ที่เรืองแสง\nF6 เปิด/ปิดระบบทางผ่าน",
+        TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+    }, routePage)
+    local enable = create("TextButton", {
+        Position = UDim2.fromOffset(0, 98), Size = UDim2.new(1, 0, 0, 44),
+        BackgroundColor3 = color.blue, BorderSizePixel = 0,
+        Text = "AUTO ทางผ่าน: OFF — กดเพื่อเริ่ม",
+        TextColor3 = color.text, TextSize = 15, Font = Enum.Font.GothamBold,
+    }, routePage)
+    local scan = create("TextButton", {
+        Position = UDim2.fromOffset(0, 155), Size = UDim2.new(1, 0, 0, 29),
+        BackgroundColor3 = color.button, BorderSizePixel = 0,
+        Text = "สแกนหิน / จุด AREA + คัดลอก", TextColor3 = color.text, TextSize = 13,
+    }, routePage)
+    local info = create("TextLabel", {
+        Position = UDim2.fromOffset(0, 199), Size = UDim2.new(1, 0, 0, 147),
+        BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+        Text = "เริ่มต้นปิดอยู่ • F6 เปิด/ปิด\nระบบจะรอข้อความ Break the rubble / Enter area",
+    }, routePage)
+    local function buildProgressController(deps)
+        local state = {enabled = false, busy = false, phase = "idle", target = nil,
+            nextTick = 0, nextAttack = 0, enteredAt = 0, restore = nil}
+        local auto = {state = state}
+        local function notify(message) deps.notify(state, message) end
+        local function finish(resume)
+            deps.release()
+            local restore = state.restore
+            state.busy, state.restore, state.target, state.phase, state.placed = false, nil, nil, "idle", false
+            if restore then restore(resume ~= false) end
+        end
+        local function own()
+            if not state.busy then
+                state.busy = true
+                state.restore = deps.takeControl()
+            end
+        end
+        function auto.start()
+            state.enabled, state.nextTick = true, 0
+            notify("เปิดทางผ่านแล้ว • รอจัดการมอนจนหินพร้อมให้ตี")
+        end
+        function auto.stop(resume)
+            state.enabled = false
+            finish(resume)
+            notify("หยุดระบบทางผ่านแล้ว")
+        end
+        function auto.toggle()
+            if state.enabled then auto.stop() else auto.start() end
+        end
+        function auto.step()
+            if not state.enabled or deps.clock() < state.nextTick then return end
+            state.nextTick = deps.clock() + 0.20
+            local ready, reason, reset = deps.ready()
+            if not ready then
+                deps.release()
+                if reset then finish(false) end
+                notify(reason or "รอตัวละครพร้อม...")
+                return
+            end
+            local phase, area = deps.objective()
+            if phase == "rubble" then
+                if state.phase == "waiting_area" then
+                    notify("หินแตกแล้ว • รอจุด AREA ปรากฏ")
+                    return
+                end
+                if state.target and state.phase == "rubble" and not deps.alive(state.target) then
+                    deps.release()
+                    state.phase, state.target = "waiting_area", nil
+                    notify("หินแตกแล้ว • รอจุด AREA")
+                    return
+                end
+                if state.phase ~= "rubble" then
+                    local target = deps.rubble()
+                    if not target then notify("ยังหาตำแหน่ง Rubble ไม่เจอ • กดสแกนหินเพื่อส่งข้อมูลได้ครับ") return end
+                    own()
+                    deps.release()
+                    state.phase, state.target, state.placed = "rubble", target, false
+                    notify("พบหินแล้ว • รอท่าปัจจุบันจบก่อนวาร์ป")
+                    return
+                end
+                if deps.motionReady and not deps.motionReady() then notify("รอท่าตี/สกิลจบ...") return end
+                if not state.placed then
+                    deps.front(state.target)
+                    state.placed, state.nextAttack = true, deps.clock() + 0.35
+                    notify("ถึงหน้าหินแล้ว • เตรียมคลิกซ้าย")
+                    return
+                end
+                if deps.clock() >= state.nextAttack then
+                    state.nextAttack = deps.clock() + 0.60
+                    deps.attack(state.target)
+                    notify("กำลังตี Rubble ด้วยคลิกซ้าย • รอหินแตก")
+                end
+            elseif phase == "area" then
+                deps.release()
+                if state.phase == "entered" and (not area or state.target.area == area) then
+                    notify("ถึงจุด AREA แล้ว • รอเกมเริ่มห้องถัดไป")
+                    return
+                end
+                local marker = deps.marker(area)
+                if not marker then
+                    notify("รอจุด AREA " .. tostring(area or "") .. " • ถ้ายังหาไม่เจอ กดสแกนเพื่อส่งข้อมูล")
+                    return
+                end
+                own()
+                if deps.motionReady and not deps.motionReady() then notify("รอท่าตีจบก่อนเข้าจุด AREA") return end
+                state.phase, state.target, state.enteredAt = "entered", marker, deps.clock()
+                deps.enter(marker)
+                notify("วาร์ปถึง AREA " .. tostring(marker.area or area or "") .. " แล้ว • รอห้องถัดไป")
+            else
+                if state.busy then finish(true) end
+                notify("รอจัดการมอน / ข้อความทางผ่านของห้องถัดไป")
+            end
+        end
+        return auto
+    end
+    local objectiveLabel, objectiveNext, objectivePhase, objectiveArea = nil, 0, nil, nil
+    local function shown(object)
+        if not object or not object.Parent then return false end
+        local cursor = object
+        while cursor and cursor ~= playerGui and cursor ~= workspace do
+            if cursor:IsA("GuiObject") and not cursor.Visible then return false end
+            if cursor:IsA("ScreenGui") and not cursor.Enabled then return false end
+            if cursor:IsA("CanvasGroup") and cursor.GroupTransparency >= 0.99 then return false end
+            cursor = cursor.Parent
+        end
+        return true
+    end
+    local function parseObjective(text)
+        text = cleanPlateText(text):lower():gsub("%s+", "")
+        if text:find("breaktherubble", 1, true) then return "rubble" end
+        local area = text:match("enterarea(%d+)")
+        if area then return "area", tonumber(area) end
+    end
+    local function objective()
+        if resultsController and resultsController.state.visible then return "end" end
+        if objectiveLabel and shown(objectiveLabel) then return parseObjective(objectiveLabel.Text) end
+        if os.clock() < objectiveNext then return objectivePhase, objectiveArea end
+        objectiveNext = os.clock() + 0.50
+        objectivePhase, objectiveArea, objectiveLabel = nil, nil, nil
+        for label in pairs(resultLabels) do
+            if shown(label) then
+                local phase, area = parseObjective(label.Text)
+                if phase then
+                    local lower = label.Name:lower()
+                    if not lower:find("shadow", 1, true) and not lower:find("echo", 1, true) then
+                        objectiveLabel, objectivePhase, objectiveArea = label, phase, area
+                        break
+                    end
+                end
+            end
+        end
+        return objectivePhase, objectiveArea
+    end
+    local function worldPosition(object)
+        if not object or not object.Parent or not object:IsDescendantOf(workspace) then return nil end
+        if object:IsA("Attachment") then return object.WorldPosition end
+        if object:IsA("BasePart") then return object.Position end
+        if object:IsA("Model") then return object:GetPivot().Position end
+    end
+    local function plateAnchor(plate)
+        local object = plate.Adornee or plate.Parent
+        if worldPosition(object) then return object end
+    end
+    local function plateText(plate)
+        local snapshot = readPlate(plate)
+        if not snapshot then return "" end
+        return table.concat(snapshot.texts, " "), snapshot
+    end
+    local function nearest(kind, requestedArea)
+        local _, _, root = ownCharacter()
+        if not root then return nil end
+        local best, bestDistance
+        local function add(object, source, area, label)
+            local position = worldPosition(object)
+            if not position or isPlayerModel(object) then return end
+            if kind == "area" and requestedArea and area ~= requestedArea then return end
+            if source and sourceHealth(source) <= 0 then return end
+            local distance = (position - root.Position).Magnitude
+            if distance > 1500 then return end
+            if not bestDistance or distance < bestDistance then
+                bestDistance = distance
+                best = {object = object, source = source, area = area, label = label, position = position}
+            end
+        end
+        for plate in pairs(hoverBillboards) do
+            local text, snapshot = plateText(plate)
+            local lower = text:lower()
+            local anchor = plateAnchor(plate)
+            if anchor and kind == "rubble" and lower:find("rubble", 1, true) and snapshot.health ~= nil then
+                add(anchor, {kind = "nameplate", object = plate, label = "Rubble HP"}, nil, text)
+            elseif anchor and kind == "area" then
+                local area = text:upper():match("AREA%s*(%d+)")
+                if area then add(anchor, nil, tonumber(area), text) end
+            end
+        end
+        -- Only explicit Rubble / numbered AREA names are accepted as a fallback.
+        if not best then
+            for object in pairs(routeObjects) do
+                local name = object.Name:lower():gsub("[%s_%-]", "")
+                if kind == "rubble" and (name == "rubble" or name == "rubblehitbox" or name == "rubblebarrier") then
+                    local source = customHealthSource(object)
+                    add(object, source, nil, object.Name)
+                elseif kind == "area" then
+                    local area = name:match("^area(%d+)$") or name:match("^area(%d+)entry$") or name:match("^area(%d+)marker$")
+                    if area and (object:IsA("BasePart") or object:IsA("Attachment")) then
+                        add(object, nil, tonumber(area), object.Name)
+                    end
+                end
+            end
+        end
+        return best
+    end
+    local mouseTicket, manager, virtual
+    local function releaseMouse()
+        local ticket = mouseTicket
+        if not ticket then return end
+        mouseTicket = nil
+        pcall(ticket.send, false)
+    end
+    local function attack()
+        if mouseTicket then return end
+        local camera = workspace.CurrentCamera
+        if not camera then return end
+        local point = camera.ViewportSize * 0.5
+        local ticket = {}
+        if router.mode() == "VirtualInput" then
+            virtual = virtual or UserInputService:CreateVirtualInput()
+            ticket.send = function(down) virtual:SendMouseButton(point, Enum.UserInputType.MouseButton1, down, 0) end
+        else
+            manager = manager or game:GetService("VirtualInputManager")
+            ticket.send = function(down) manager:SendMouseButtonEvent(point.X, point.Y, 0, down, game, 0) end
+        end
+        mouseTicket = ticket
+        local ok, err = pcall(ticket.send, true)
+        if not ok then releaseMouse() error(err, 0) end
+        task.delay(0.08, function() if mouseTicket == ticket then releaseMouse() end end)
+    end
+    local function takeControl()
+        local wasFlying = flight ~= nil
+        if wasFlying then stopFlight("พักบินเพื่อตีหิน/เข้าจุด AREA") end
+        controller.release()
+        hoverController.suspendForRoute()
+        local _, humanoid = ownCharacter()
+        local autoRotate = humanoid and humanoid.AutoRotate
+        if humanoid then humanoid.AutoRotate = false end
+        return function(resumeFlight)
+            if humanoid and humanoid.Parent then humanoid.AutoRotate = autoRotate end
+            if resumeFlight ~= false and wasFlying and not closed then
+                local wantedSkills = controller.state.enabled
+                startFlight()
+                if wantedSkills then controller.start() end
+            end
+        end
+    end
+    local function front(target)
+        local _, humanoid, root = ownCharacter()
+        local object = target.object
+        local position = worldPosition(object)
+        if not root or not position then error("ตำแหน่งหินหายไป") end
+        local frame, size
+        if object:IsA("Model") then frame, size = object:GetBoundingBox()
+        elseif object:IsA("BasePart") then frame, size = object.CFrame, object.Size
+        elseif object:IsA("Attachment") and object.Parent:IsA("BasePart") then frame, size = object.Parent.CFrame, object.Parent.Size end
+        local center = frame and frame.Position or position
+        local direction = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z)
+        if direction.Magnitude < 0.01 then direction = Vector3.new(0, 0, -1) end
+        direction = direction.Unit
+        local extent = 3
+        if size and math.max(size.X, size.Z) <= 200 then
+            extent = math.abs(direction:Dot(frame.RightVector)) * size.X * 0.5
+                + math.abs(direction:Dot(frame.LookVector)) * size.Z * 0.5
+        end
+        local bottom = center.Y - (size and size.Y * 0.5 or 0)
+        local height = humanoid.HipHeight + root.Size.Y * 0.5
+        local point = Vector3.new(center.X, bottom + height, center.Z) + direction * (extent + 4)
+        root.CFrame = CFrame.lookAt(point, Vector3.new(center.X, point.Y, center.Z))
+        local camera = workspace.CurrentCamera
+        if camera and camera.CameraType ~= Enum.CameraType.Scriptable then
+            camera.CFrame = CFrame.lookAt(point + direction * 12 + Vector3.new(0, 6, 0), center)
+        end
+        root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+    end
+    local function enter(marker)
+        local _, humanoid, root = ownCharacter()
+        local point = worldPosition(marker.object)
+        if not root or not point then error("ตำแหน่ง AREA หายไป") end
+        local destination = point + Vector3.new(0, humanoid.HipHeight + root.Size.Y * 0.5, 0)
+        root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
+        root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+        -- A small normal walk after arrival allows movement-triggered room zones to activate.
+        humanoid:MoveTo(destination + Vector3.new(0, 0, -2))
+    end
+    local infoUntil = 0
+    progressController = buildProgressController({
+        clock = os.clock, objective = objective, rubble = function() return nearest("rubble") end,
+        marker = function(area) return nearest("area", area) end,
+        front = front, enter = enter, attack = attack, release = releaseMouse, takeControl = takeControl,
+        motionReady = function()
+            local _, humanoid, root = ownCharacter()
+            return root and not root.Anchored and not skillAnimationBusy(humanoid)
+        end,
+        alive = function(target)
+            if not worldPosition(target.object) then return false end
+            if target.object:GetAttribute("Destroyed") == true or target.object:GetAttribute("Dead") == true then return false end
+            -- Invisible hitboxes are valid targets. A rounded 0% nameplate is not proof of destruction.
+            if target.source and target.source.kind ~= "nameplate" and sourceHealth(target.source) <= 0 then return false end
+            return true
+        end,
+        ready = function()
+            local _, humanoid, root = ownCharacter()
+            if not root then return false, "รอตัวละครเกิดใหม่", true end
+            if closed or UserInputService:GetFocusedTextBox() or GuiService.MenuIsOpen then return false, "พักทางผ่านระหว่างพิมพ์/เปิดเมนู" end
+            return true
+        end,
+        notify = function(state, message)
+            if closed then return end
+            local text = state.enabled and "AUTO ทางผ่าน: ON — กดเพื่อหยุด" or "AUTO ทางผ่าน: OFF — กดเพื่อเริ่ม"
+            if enable.Text ~= text then enable.Text = text end
+            enable.BackgroundColor3 = state.enabled and color.green or color.blue
+            if os.clock() >= infoUntil and info.Text ~= message then info.Text = message end
+        end,
+    })
+    enable.Activated:Connect(progressController.toggle)
+    scan.Activated:Connect(function()
+        local phase, area = objective()
+        local rubble, marker = nearest("rubble"), nearest("area", area)
+        local lines = {"Rubble / AREA scan v1.18", "Objective: " .. tostring(phase) .. " area=" .. tostring(area),
+            "Objective label: " .. (objectiveLabel and objectiveLabel:GetFullName() or "none")}
+        for _, item in ipairs({{name = "Rubble", target = rubble}, {name = "AREA", target = marker}}) do
+            local t = item.target
+            lines[#lines + 1] = item.name .. ": " .. (t and t.object:GetFullName() or "not located")
+        end
+        local count = 0
+        for plate in pairs(hoverBillboards) do
+            local text = plateText(plate)
+            local lower = text:lower()
+            if lower:find("rubble", 1, true) or lower:find("area", 1, true) then
+                count = count + 1
+                if count <= 25 then
+                    local anchor = plateAnchor(plate)
+                    lines[#lines + 1] = "PLATE " .. plate:GetFullName() .. " | " .. text:sub(1, 180) ..
+                        " | world=" .. (anchor and anchor:GetFullName() or "no world anchor")
+                end
+            end
+        end
+        count = 0
+        for label in pairs(resultLabels) do
+            local text = cleanPlateText(label.Text)
+            if shown(label) and (text:lower():find("rubble", 1, true) or text:lower():find("area", 1, true)) then
+                count = count + 1
+                if count <= 25 then lines[#lines + 1] = "GUI " .. label:GetFullName() .. " | " .. text:sub(1, 150) end
+            end
+        end
+        count = 0
+        for object in pairs(routeObjects) do
+            count = count + 1
+            if count <= 25 then
+                local p = worldPosition(object)
+                lines[#lines + 1] = "WORLD " .. object.ClassName .. " " .. object:GetFullName() ..
+                    " | position=" .. (p and tostring(p) or "none")
+            end
+        end
+        local report = table.concat(lines, "\n")
+        print(report)
+        local copy, copied = setclipboard or toclipboard, false
+        if type(copy) == "function" then copied = pcall(copy, report) end
+        infoUntil = os.clock() + 6
+        info.Text = copied and "คัดลอกข้อมูลแล้ว • ส่งให้ผมถ้าตำแหน่งยังไม่เจอครับ" or "ดูข้อมูลสแกนใน Console (F9)"
+    end)
+end
+-- End rubble / AREA progression.
+
 local activePage = "skills"
 local function showWindowPage(name)
     activePage = name
@@ -2105,20 +2511,24 @@ local function showWindowPage(name)
     flightPage.Visible = not collapsed and name == "flight"
     autoEPage.Visible = not collapsed and name == "autoE"
     resultsPage.Visible = not collapsed and name == "results"
+    routePage.Visible = not collapsed and name == "route"
     skillTab.BackgroundColor3 = name == "skills" and color.blue or color.button
     hoverTab.BackgroundColor3 = name == "hover" and color.blue or color.button
     flightTab.BackgroundColor3 = name == "flight" and color.blue or color.button
     autoETab.BackgroundColor3 = name == "autoE" and color.blue or color.button
     resultsTab.BackgroundColor3 = name == "results" and color.blue or color.button
+    routeTab.BackgroundColor3 = name == "route" and color.blue or color.button
 end
 skillTab.Activated:Connect(function() showWindowPage("skills") end)
 hoverTab.Activated:Connect(function() showWindowPage("hover") end)
 flightTab.Activated:Connect(function() showWindowPage("flight") end)
 autoETab.Activated:Connect(function() showWindowPage("autoE") end)
 resultsTab.Activated:Connect(function() showWindowPage("results") end)
+routeTab.Activated:Connect(function() showWindowPage("route") end)
 local nextHoverTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or not hoverController.state.enabled or os.clock() < nextHoverTick then return end
+    if progressController and progressController.state.busy then return end
     nextHoverTick = os.clock() + 0.05
     local ok, err = pcall(function()
         refreshHoverModels()
@@ -2182,6 +2592,7 @@ hotkeys = buildHotkeyController({
         [Enum.KeyCode.F3] = toggleSkills,
         [Enum.KeyCode.F4] = toggleAutoE,
         [Enum.KeyCode.F5] = resultsController.toggle,
+        [Enum.KeyCode.F6] = progressController.toggle,
     },
     blocked = function()
         return closed or not gameFocused() or GuiService.MenuIsOpen
@@ -2206,7 +2617,7 @@ slower.Activated:Connect(function() changeInterval(controller.state.interval - 0
 faster.Activated:Connect(function() changeInterval(controller.state.interval + 0.25) end)
 minimize.Activated:Connect(function()
     collapsed = not collapsed
-    skillTab.Visible, hoverTab.Visible, flightTab.Visible, autoETab.Visible, resultsTab.Visible = not collapsed, not collapsed, not collapsed, not collapsed, not collapsed
+    skillTab.Visible, hoverTab.Visible, flightTab.Visible, autoETab.Visible, resultsTab.Visible, routeTab.Visible = not collapsed, not collapsed, not collapsed, not collapsed, not collapsed, not collapsed
     showWindowPage(activePage)
     panel.Size = UDim2.fromOffset(340, collapsed and 43 or 460)
     minimize.Text = collapsed and "+" or "−"
@@ -2258,6 +2669,10 @@ local nextTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or os.clock() < nextTick then return end
     nextTick = os.clock() + 0.05
+    if progressController.state.enabled then
+        local okRoute, errRoute = pcall(progressController.step)
+        if not okRoute then progressController.stop() warn("Auto Route:", errRoute) end
+    end
     local okResult, errResult = pcall(resultsController.step)
     if not okResult then resultsController.stop() warn("Auto Results:", errResult) end
     if autoEController.state.enabled then
@@ -2272,6 +2687,7 @@ session.stops = {
     controller.dispose,
     autoEController.stop,
     resultsController.stop,
+    function() progressController.stop(false) end,
     function() stopFlight("ปิดหน้าต่างแล้ว") end,
     function() if hoverController then hoverController.stop() end end,
     function()
@@ -2282,6 +2698,7 @@ session.stops = {
         table.clear(autoEVisible)
         table.clear(resultButtons)
         table.clear(resultLabels)
+        table.clear(routeObjects)
     end,
 }
 if closed then cleanupSession() end
