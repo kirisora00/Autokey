@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.19 — follow enemies above, in front or behind with adjustable spacing.
+-- Auto Skill + NPC Hover + Flight v1.20 — combat-only following, live enemyBar health and empty-wave waiting.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -709,6 +709,23 @@ local function friendlyModel(model)
     end
     return false
 end
+local function combatTarget(model, plate, snapshot)
+    if model:GetAttribute("RubbleHealth") ~= nil or model:GetAttribute("RubbleMaxHealth") ~= nil then return false end
+    local title = snapshot and snapshot.title or model.Name
+    if tostring(title):lower():match("^rubble") or (plate and plate.Name:lower():find("rubble", 1, true)) then return false end
+    local cursor = model
+    while cursor and cursor ~= workspace do
+        local name = cursor.Name:lower()
+        if name == "effects" or name == "effect" then return false end
+        cursor = cursor.Parent
+    end
+    -- The verified game's combatants live in workspace.enemies. Do not treat map health objects as mobs.
+    local enemies = workspace:FindFirstChild("enemies")
+    if enemies and not model:IsDescendantOf(enemies) and not enemyFolderHint(model)
+        and model:GetAttribute("IsEnemy") ~= true and model:GetAttribute("IsBoss") ~= true
+        and not (plate and plate.Name:lower() == "enemybar") then return false end
+    return true
+end
 local function customHealthSource(model)
     for _, name in ipairs({"CurrentHealth", "CurrentHP", "Health", "HP", "health", "hp"}) do
         local value = model:GetAttribute(name)
@@ -733,6 +750,7 @@ end
 -- Nameplates can be parented in PlayerGui with Adornee pointing into Workspace.
 local hoverBillboards = {}
 local plateCache = setmetatable({}, {__mode = "k"})
+local combatBars = setmetatable({}, {__mode = "k"})
 local function cleanPlateText(text)
     return tostring(text or ""):gsub("<[^>]*>", ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
@@ -805,7 +823,16 @@ end
 local function sourceHealth(source)
     if not source or not source.object.Parent then return 0 end
     local value
-    if source.kind == "humanoid" then value = source.object.Health
+    if source.kind == "combat" then
+        local realHealth = sourceHealth(source.base)
+        if realHealth <= 0 or not source.plate.Parent then return 0 end
+        local owner = plateActor(source.plate)
+        if not owner or (owner ~= source.model and not owner:IsDescendantOf(source.model)) then return 0 end
+        local snapshot = readPlate(source.plate)
+        if snapshot and snapshot.health ~= nil then return math.min(realHealth, snapshot.health) end
+        -- A hidden/offscreen bar is not proof of death. Preserve real health until it reappears.
+        return realHealth
+    elseif source.kind == "humanoid" then value = source.object.Health
     elseif source.kind == "attribute" then value = source.object:GetAttribute(source.field)
     elseif source.kind == "nameplate" then
         local snapshot = readPlate(source.object)
@@ -930,25 +957,52 @@ end
 local function scanHoverTargets(radius, skipped)
     local _, _, root = ownCharacter()
     if not root then return {} end
-    local byPart, entries, seenModel = {}, {}, {}
+    local byPart, entries, seenModel, observed, mappedPlates = {}, {}, {}, {}, {}
     local now = os.clock()
-    hoverScanStats = {outside = 0, noPart = 0, friendly = 0, noHealth = 0, plates = 0, unmapped = 0}
+    hoverScanStats = {outside = 0, noPart = 0, friendly = 0, noHealth = 0, plates = 0, unmapped = 0, nonCombat = 0}
+    -- Collect live bars before admitting humanoids whose Health can remain at a placeholder 100.
+    for plate in pairs(hoverBillboards) do
+        local model, anchor = plateActor(plate)
+        local near = model and not isPlayerModel(model)
+        if near then
+            local part = anchor:IsA("BasePart") and anchor or model.PrimaryPart
+            if part and (part.Position - root.Position).Magnitude > radius then near = false end
+        end
+        local snapshot = near and readPlate(plate)
+        if snapshot and snapshot.health ~= nil then
+            hoverScanStats.plates = hoverScanStats.plates + 1
+            local resolved, humanoid, source = resolveActor(model)
+            if resolved and anchor:IsDescendantOf(resolved) then model = resolved end
+            if plate.Name:lower() == "enemybar" then combatBars[model] = plate end
+            local data = {model = model, humanoid = humanoid, source = source, plate = plate, snapshot = snapshot}
+            local previous = observed[model]
+            if not previous or plate.Name:lower() == "enemybar" then observed[model] = data end
+            mappedPlates[#mappedPlates + 1] = data
+        elseif not model then
+            hoverScanStats.unmapped = hoverScanStats.unmapped + 1
+        end
+    end
     local function include(model, humanoid, source, plate, snapshot)
         if not model or not model:IsDescendantOf(workspace) or isPlayerModel(model) then return end
+        local data = observed[model]
+        if data then plate, snapshot = data.plate, data.snapshot end
+        plate = plate or combatBars[model]
+        if not combatTarget(model, plate, snapshot) then
+            hoverScanStats.nonCombat = hoverScanStats.nonCombat + 1
+            return
+        end
         if model:GetAttribute("Dead") == true or model:GetAttribute("IsDead") == true then return end
         if friendlyModel(model) then hoverScanStats.friendly = hoverScanStats.friendly + 1 return end
-        if sourceHealth(source) <= 0 then return end
+        if sourceHealth(source) <= 0 or (snapshot and snapshot.health ~= nil and snapshot.health <= 0) then return end
+        if plate and plate.Name:lower() == "enemybar" and source.kind ~= "nameplate" then
+            source = {kind = "combat", object = source.object, base = source, plate = plate, model = model,
+                label = source.label .. " + enemyBar"}
+            if sourceHealth(source) <= 0 then return end
+        end
         local part, head = targetParts(model, humanoid)
         if not part then hoverScanStats.noPart = hoverScanStats.noPart + 1 return end
         local previous = byPart[part]
-        if previous then
-            if plate then
-                previous.nameplate = plate
-                previous.displayName = snapshot.title or previous.displayName
-                previous.immune = snapshot.immune
-            end
-            return
-        end
+        if previous then return end
         local key = humanoid or model
         local excludedUntil = skipped[key]
         local distance = (part.Position - root.Position).Magnitude
@@ -970,29 +1024,9 @@ local function scanHoverTargets(radius, skipped)
             include(model, humanoid, source)
         end
     end
-    for plate in pairs(hoverBillboards) do
-        local model, anchor = plateActor(plate)
-        local near = model and not isPlayerModel(model)
-        if near then
-            local part = anchor:IsA("BasePart") and anchor or model.PrimaryPart
-            if part and (part.Position - root.Position).Magnitude > radius then near = false end
-        end
-        -- Do not parse nameplates for distant map decorations or other players.
-        local snapshot = near and readPlate(plate)
-        if snapshot and snapshot.health ~= nil then
-            hoverScanStats.plates = hoverScanStats.plates + 1
-            if not model then
-                hoverScanStats.unmapped = hoverScanStats.unmapped + 1
-            else
-                local resolved, humanoid, source = resolveActor(model)
-                if resolved and anchor:IsDescendantOf(resolved) then model = resolved end
-                -- An explicit zero in real health data must not be resurrected by a stale nameplate.
-                source = source or {kind = "nameplate", object = plate, label = "Nameplate HP"}
-                include(model, humanoid, source, plate, snapshot)
-            end
-        elseif not model then
-            hoverScanStats.unmapped = hoverScanStats.unmapped + 1
-        end
+    for _, data in ipairs(mappedPlates) do
+        local source = data.source or {kind = "nameplate", object = data.plate, label = "Nameplate HP"}
+        include(data.model, data.humanoid, source, data.plate, data.snapshot)
     end
     for _, entry in pairs(byPart) do entries[#entries + 1] = entry end
     table.sort(entries, function(a, b)
@@ -1006,6 +1040,8 @@ local function targetAlive(entry)
     if entry and entry.nameplate then
         local snapshot = readPlate(entry.nameplate)
         entry.immune = snapshot and snapshot.immune or false
+        if snapshot and snapshot.health ~= nil and snapshot.health <= 0 then return false end
+        if not combatTarget(entry.model, entry.nameplate, snapshot) then return false end
     end
     if not entry or not entry.model:IsDescendantOf(workspace) or sourceHealth(entry.source) <= 0
         or entry.model:GetAttribute("Dead") == true or entry.model:GetAttribute("IsDead") == true then return false end
@@ -1164,7 +1200,7 @@ local function buildHoverController(deps)
             state.nextScan = deps.clock() + 0.40
             local entries = deps.scan(state.radius, skipped)
             if not entries[1] then
-                notify("ยังไม่มีมอนในระยะ • ไม่ล็อกตำแหน่งตัวละคร\nเดินเข้าห้อง/จุด Spawn ต่อได้ • ระยะ " .. state.radius .. " studs")
+                notify("ไม่มีมอนต่อสู้ในระยะ • รอเกิดชุดใหม่\nหยุดวาร์ปแล้ว • ขยับเองได้ตามปกติ • ระยะ " .. state.radius .. " studs")
                 return
             end
             state.target = entries[1]
@@ -1192,6 +1228,10 @@ hoverController = buildHoverController({
     clock = os.clock, scan = scanHoverTargets, alive = targetAlive,
     releaseSkills = controller.release,
     playerReady = function()
+        if progressController and progressController.combatTransition and progressController.combatTransition() then
+            hoverController.suspendForRoute()
+            return false, "จัดการมอนครบแล้ว • รอชุดใหม่\nF2 จะไม่เลือกหินหรือจุด AREA"
+        end
         local _, humanoid = ownCharacter()
         if not humanoid then return false, "รอตัวละครเกิดใหม่" end
         if humanoid.SeatPart then return false, "ลงจากที่นั่งก่อนครับ" end
@@ -1533,9 +1573,9 @@ hoverNext.Activated:Connect(function()
 end)
 -- A bounded report is collected only when Scan is clicked, never every frame.
 local function hoverDiagnostic(entries)
-    local lines = {"NPC Hover v1.5", "Health-positive targets: " .. #entries,
-        string.format("Nameplates: %d; unmapped: %d; no health source: %d",
-            hoverScanStats.plates or 0, hoverScanStats.unmapped or 0, hoverScanStats.noHealth or 0)}
+    local lines = {"NPC Follow v1.20", "Health-positive targets: " .. #entries,
+        string.format("Nameplates: %d; unmapped: %d; no health source: %d; non-combat excluded: %d",
+            hoverScanStats.plates or 0, hoverScanStats.unmapped or 0, hoverScanStats.noHealth or 0, hoverScanStats.nonCombat or 0)}
     for index = 1, math.min(15, #entries) do
         local entry = entries[index]
         lines[#lines + 1] = string.format("TARGET %s | %.0f studs | %s=%.1f | immune=%s | %s",
@@ -2538,6 +2578,10 @@ do
             if os.clock() >= infoUntil and info.Text ~= message then info.Text = message end
         end,
     })
+    function progressController.combatTransition()
+        local phase = objective()
+        return phase == "rubble" or phase == "area" or phase == "end"
+    end
     enable.Activated:Connect(progressController.toggle)
     scan.Activated:Connect(function()
         local phase, area = objective()
