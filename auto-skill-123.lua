@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.14 — automatic Next Floor or Retry on the results screen.
+-- Auto Skill + NPC Hover + Flight v1.15 — find result controls by visible labels and aligned on-screen actions.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -178,7 +178,7 @@ local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
 local hotkeys, autoEController, resultsController
-local resultButtons = {}
+local resultButtons, resultLabels = {}, {}
 local autoEPrompts, autoEVisible, autoECursor = {}, {}, nil
 local session = {disposed = false}
 sessionEnv.AutokeySkill123Session = session
@@ -846,7 +846,10 @@ local function trackHumanoid(object)
     dirtyGeometry(object)
 end
 local function trackPlate(object)
-    if object:IsA("GuiButton") and not object:IsDescendantOf(gui) then resultButtons[object] = true end
+    if not object:IsDescendantOf(gui) then
+        if object:IsA("GuiButton") then resultButtons[object] = true end
+        if object:IsA("TextLabel") or object:IsA("TextButton") then resultLabels[object] = true end
+    end
     if resultsController then resultsController.dirty(object) end
     if object:IsA("BillboardGui") then hoverBillboards[object] = true end
     dirtyGeometry(object)
@@ -856,7 +859,7 @@ local function untrack(object)
     hoverHumanoids[object], hoverBillboards[object], hoverModels[object] = nil, nil, nil
     rigCache[object], plateCache[object] = nil, nil
     if modelCursor == object then modelCursor = nil end
-    autoEPrompts[object], autoEVisible[object], resultButtons[object] = nil, nil, nil
+    autoEPrompts[object], autoEVisible[object], resultButtons[object], resultLabels[object] = nil, nil, nil, nil
     if resultsController then resultsController.dirty(object) end
     if autoECursor == object then autoECursor = nil end
 end
@@ -884,7 +887,10 @@ for _, object in ipairs(workspace:GetDescendants()) do
 end
 for _, object in ipairs(playerGui:GetDescendants()) do
     if object:IsA("BillboardGui") then hoverBillboards[object] = true end
-    if object:IsA("GuiButton") and not object:IsDescendantOf(gui) then resultButtons[object] = true end
+    if not object:IsDescendantOf(gui) then
+        if object:IsA("GuiButton") then resultButtons[object] = true end
+        if object:IsA("TextLabel") or object:IsA("TextButton") then resultLabels[object] = true end
+    end
 end
 
 local function scanHoverTargets(radius, skipped)
@@ -1689,10 +1695,16 @@ do
         TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
     }, resultsPage)
     local info = create("TextLabel", {
-        Position = UDim2.fromOffset(0, 207), Size = UDim2.new(1, 0, 0, 130),
+        Position = UDim2.fromOffset(0, 229), Size = UDim2.new(1, 0, 0, 108),
         BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 14, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
         Text = "รอหน้าจอจบรอบ • ระบบเริ่มต้นปิดอยู่\nกดเฉพาะปุ่มที่เลือก ไม่กด Leave",
+    }, resultsPage)
+    local infoHoldUntil = 0
+    local scanButton = create("TextButton", {
+        Position = UDim2.fromOffset(0, 192), Size = UDim2.new(1, 0, 0, 28),
+        BackgroundColor3 = color.button, BorderSizePixel = 0,
+        Text = "สแกนปุ่ม + คัดลอกข้อมูล", TextColor3 = color.text, TextSize = 13,
     }, resultsPage)
     local function buildResultsController(deps)
         local state = {enabled = false, mode = "next", visible = false, target = nil,
@@ -1748,10 +1760,13 @@ do
         return auto
     end
     local captionCache = setmetatable({}, {__mode = "k"})
+    local labelForControl = setmetatable({}, {__mode = "k"})
     local function normalizedText(text)
         return tostring(text or ""):gsub("<[^>]*>", ""):lower():gsub("%s+", "")
     end
     local function caption(button)
+        local label = labelForControl[button]
+        if label and label.Parent then return normalizedText(label.Text) end
         local function actionText(text)
             return text:match("^nextfloor") or text:match("^retry") or text == "leave"
         end
@@ -1797,21 +1812,72 @@ do
         if text:match("^retry") then return "retry" end
         if text == "leave" then return "leave" end
     end
-    local function findResult(mode)
-        local groups = {}
-        for button in pairs(resultButtons) do
-            if visible(button) then
-                local kind = classify(button)
-                local screen = button:FindFirstAncestorOfClass("ScreenGui")
-                if kind and screen then
-                    local group = groups[screen] or {}
-                    group[kind] = button
-                    groups[screen] = group
+    local function center(object)
+        return object.AbsolutePosition + object.AbsoluteSize * 0.5
+    end
+    local function controlForLabel(label)
+        local point, selected = center(label), label
+        local selectedArea = math.huge
+        local function consider(object)
+            if object:IsA("GuiButton") and visible(object) then
+                local size = object.AbsoluteSize
+                local p = object.AbsolutePosition
+                if size.X <= 480 and size.Y <= 180 and point.X >= p.X and point.X <= p.X + size.X
+                    and point.Y >= p.Y and point.Y <= p.Y + size.Y then
+                    local area = size.X * size.Y
+                    if area < selectedArea then selected, selectedArea = object, area end
                 end
             end
         end
-        for _, group in pairs(groups) do
-            if group.next and group.retry and group.leave then return group[mode] end
+        local parent = label.Parent
+        for _ = 1, 6 do
+            if not parent or parent == playerGui then break end
+            consider(parent)
+            parent = parent.Parent
+        end
+        for _, hit in ipairs(playerGui:GetGuiObjectsAtPosition(point.X, point.Y)) do consider(hit) end
+        -- Some games handle clicks on Frames/labels instead of using a GuiButton.
+        labelForControl[selected] = label
+        return selected
+    end
+    local function classifyText(text)
+        if text:match("^nextfloor") then return "next" end
+        if text:match("^retry") then return "retry" end
+        if text:match("^leave") then return "leave" end
+    end
+    local function findResult(mode)
+        local choices = {next = {}, retry = {}, leave = {}}
+        local seen = {next = {}, retry = {}, leave = {}}
+        local function add(kind, object)
+            if kind and not seen[kind][object] then
+                seen[kind][object] = true
+                choices[kind][#choices[kind] + 1] = object
+            end
+        end
+        for button in pairs(resultButtons) do
+            if visible(button) then add(classifyText(caption(button)), button) end
+        end
+        for label in pairs(resultLabels) do
+            if visible(label) then
+                local kind = classifyText(normalizedText(label.Text))
+                if kind then add(kind, controlForLabel(label)) end
+            end
+        end
+        -- Recognize the horizontal Retry / Next Floor / Leave row, even across different ScreenGuis.
+        for _, nextControl in ipairs(choices.next) do
+            local n = center(nextControl)
+            for _, retryControl in ipairs(choices.retry) do
+                local r = center(retryControl)
+                local tolerance = math.max(nextControl.AbsoluteSize.Y, retryControl.AbsoluteSize.Y, 24)
+                if r.X < n.X and math.abs(r.Y - n.Y) <= tolerance then
+                    for _, leaveControl in ipairs(choices.leave) do
+                        local l = center(leaveControl)
+                        if l.X > n.X and math.abs(l.Y - n.Y) <= math.max(tolerance, leaveControl.AbsoluteSize.Y) then
+                            return mode == "retry" and retryControl or nextControl
+                        end
+                    end
+                end
+            end
         end
     end
     local mouseTicket, manager, virtual
@@ -1882,7 +1948,7 @@ do
             if enableButton.BackgroundColor3 ~= background then enableButton.BackgroundColor3 = background end
             nextButton.BackgroundColor3 = state.mode == "next" and color.blue or color.button
             retryButton.BackgroundColor3 = state.mode == "retry" and color.blue or color.button
-            if info.Text ~= message then info.Text = message end
+            if os.clock() >= infoHoldUntil and info.Text ~= message then info.Text = message end
         end,
         error = function(err) warn("Auto Results:", err) end,
     })
@@ -1897,6 +1963,35 @@ do
             end
         end
     end
+    scanButton.Activated:Connect(function()
+        local found = findResult(resultsController.state.mode)
+        local lines = {"Auto Results v1.15", "Found selected control: " .. (found and found:GetFullName() or "none")}
+        local count = 0
+        for label in pairs(resultLabels) do
+            if visible(label) then
+                local text = normalizedText(label.Text)
+                if text:find("next", 1, true) or text:find("retry", 1, true) or text:find("leave", 1, true)
+                    or text:find("victory", 1, true) or text:find("defeat", 1, true) then
+                    count = count + 1
+                    if count <= 30 then
+                        local p, size = label.AbsolutePosition, label.AbsoluteSize
+                        lines[#lines + 1] = string.format("%s | %s | '%s' | %.0f,%.0f %.0fx%.0f | parent=%s",
+                            label.ClassName, label:GetFullName(), label.Text:sub(1, 150),
+                            p.X, p.Y, size.X, size.Y, label.Parent and label.Parent.ClassName or "nil")
+                    end
+                end
+            end
+        end
+        lines[#lines + 1] = "Matching visible labels: " .. count
+        local report = table.concat(lines, "\n")
+        print(report)
+        local copy, copied = setclipboard or toclipboard, false
+        if type(copy) == "function" then copied = pcall(copy, report) end
+        infoHoldUntil = os.clock() + 6
+        info.Text = (found and "พบปุ่มแล้ว" or "ยังไม่พบชุดปุ่มจบรอบ") ..
+            (copied and " • คัดลอกข้อมูลแล้ว ส่งให้ผมได้ครับ" or " • ดูข้อมูลใน Console (F9)")
+    end)
+
     nextButton.Activated:Connect(function() resultsController.select("next") end)
     retryButton.Activated:Connect(function() resultsController.select("retry") end)
     enableButton.Activated:Connect(resultsController.toggle)
@@ -2088,6 +2183,7 @@ session.stops = {
         table.clear(autoEPrompts)
         table.clear(autoEVisible)
         table.clear(resultButtons)
+        table.clear(resultLabels)
     end,
 }
 if closed then cleanupSession() end
