@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.15 — find result controls by visible labels and aligned on-screen actions.
+-- Auto Skill + NPC Hover + Flight v1.16 — rearm reused EndScreen buttons and retry unacknowledged votes.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -1708,11 +1708,12 @@ do
     }, resultsPage)
     local function buildResultsController(deps)
         local state = {enabled = false, mode = "next", visible = false, target = nil,
-            since = 0, nextPoll = 0, lastClick = -math.huge, attempts = 0}
+            since = 0, nextPoll = 0, lastClick = -math.huge, attempts = 0, lastVotes = nil}
         local auto = {state = state}
         local function notify(message) deps.notify(state, message) end
         local function resetTarget(button)
             state.target, state.since, state.attempts, state.lastClick = button, deps.clock(), 0, -math.huge
+            state.lastVotes = nil
         end
         function auto.stop()
             state.enabled = false
@@ -1737,13 +1738,24 @@ do
             local button = deps.find(state.mode)
             state.visible = button ~= nil
             if button ~= state.target then resetTarget(button) end
+            local votes = button and deps.voteCount and deps.voteCount(button) or nil
+            if votes ~= nil then
+                -- EndScreen reuses the same Button instance. A cleared vote starts a fresh round.
+                if state.lastVotes and state.lastVotes > 0 and votes == 0 then resetTarget(button) end
+                state.lastVotes = votes
+            end
             if not state.enabled then return end
             if not button then notify("รอหน้าจอจบรอบ...") return end
             if deps.voted(button) then notify("ลงคะแนนแล้ว • รอเกมเริ่มรอบถัดไป") return end
             local blocked = deps.blocked(button)
             if blocked then notify(blocked) return end
             if deps.clock() - state.since < 0.60 or deps.clock() - state.lastClick < 2 then return end
-            if state.attempts >= 1 then notify("ส่งคลิกแล้ว • รอเกมเริ่มรอบถัดไป") return end
+            if state.attempts >= 1 and (votes == nil or votes > 0) then
+                notify("ส่งคลิกแล้ว • รอเกมเริ่มรอบถัดไป")
+                return
+            end
+            -- If the selected action is still 0/n, retry after the existing two-second cooldown.
+            -- This also catches a hide/show transition shorter than our polling interval.
             state.attempts, state.lastClick = state.attempts + 1, deps.clock()
             local ok, err = pcall(deps.click, button)
             if not ok then
@@ -1796,12 +1808,20 @@ do
         return main
     end
     local function visible(button)
+        if button:IsA("TextLabel") and button.TextTransparency >= 0.99 and button.TextStrokeTransparency >= 0.99 then return false end
         if not button.Parent or not button:IsDescendantOf(playerGui) or button:IsDescendantOf(gui) then return false end
         if button.AbsoluteSize.X <= 0 or button.AbsoluteSize.Y <= 0 then return false end
+        local camera = workspace and workspace.CurrentCamera
+        if camera then
+            local point = button.AbsolutePosition + button.AbsoluteSize * 0.5 + GuiService:GetGuiInset()
+            local view = camera.ViewportSize
+            if point.X < 0 or point.Y < 0 or point.X > view.X or point.Y > view.Y then return false end
+        end
         local object = button
         while object and object ~= playerGui do
             if object:IsA("GuiObject") and not object.Visible then return false end
             if object:IsA("ScreenGui") and not object.Enabled then return false end
+            if object:IsA("CanvasGroup") and object.GroupTransparency >= 0.99 then return false end
             object = object.Parent
         end
         return true
@@ -1846,6 +1866,24 @@ do
         if text:match("^leave") then return "leave" end
     end
     local function findResult(mode)
+        -- Verified hierarchy from the user's scan. Prefer MainText over the decorative TextShadow.
+        local screen = playerGui:FindFirstChild("EndScreen")
+        local holder = screen and screen:FindFirstChild("Holder")
+        local constrained = holder and holder:FindFirstChild("ConstraintedHolder")
+        local row = constrained and constrained:FindFirstChild("ButtonsHolder")
+        if row then
+            local frame = row:FindFirstChild(mode == "retry" and "RetryButton" or "NextButton")
+            local button = frame and frame:FindFirstChild("Button")
+            local label = frame and (frame:FindFirstChild("MainText") or frame:FindFirstChild("TextShadow"))
+            if button and label then
+                if visible(button) and visible(label) then
+                    labelForControl[button] = label
+                    return button
+                end
+                -- The verified result screen is hidden; skip a scan of unrelated HUD labels.
+                return nil
+            end
+        end
         local choices = {next = {}, retry = {}, leave = {}}
         local seen = {next = {}, retry = {}, leave = {}}
         local function add(kind, object)
@@ -1927,6 +1965,9 @@ do
     end
     resultsController = buildResultsController({
         clock = os.clock, find = findResult, click = clickResult, release = releaseMouse,
+        voteCount = function(button)
+            return tonumber(caption(button):match(":(%d+)/"))
+        end,
         voted = function(button)
             local current = caption(button):match(":(%d+)%s*/")
             local maximum = caption(button):match(":%d+/(%d+)")
@@ -1965,7 +2006,11 @@ do
     end
     scanButton.Activated:Connect(function()
         local found = findResult(resultsController.state.mode)
-        local lines = {"Auto Results v1.15", "Found selected control: " .. (found and found:GetFullName() or "none")}
+        local lines = {"Auto Results v1.16", "Found selected control: " .. (found and found:GetFullName() or "none")}
+        lines[#lines + 1] = string.format("Mode=%s attempts=%d votes=%s visible=%s",
+            resultsController.state.mode, resultsController.state.attempts,
+            tostring(resultsController.state.lastVotes), tostring(resultsController.state.visible))
+        if found then lines[#lines + 1] = "Current caption: " .. caption(found) end
         local count = 0
         for label in pairs(resultLabels) do
             if visible(label) then
