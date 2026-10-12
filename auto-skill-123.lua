@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.16 — rearm reused EndScreen buttons and retry unacknowledged votes.
+-- Auto Skill + NPC Hover + Flight v1.17 — fly through walls with saved character collision states.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -566,7 +566,7 @@ create("TextLabel", {
     Position = UDim2.fromOffset(0, 42), Size = UDim2.new(1, 0, 0, 100),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 15,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "W / A / S / D   เคลื่อนที่ตามมุมกล้อง\nSpace   บินขึ้น\nCtrl   บินลง\nปล่อยปุ่ม   ลอยอยู่กับที่",
+    Text = "W / A / S / D   เคลื่อนที่ตามมุมกล้อง\nSpace   บินขึ้น\nCtrl   บินลง\nปล่อยปุ่ม   ลอยอยู่กับที่\nเปิดบินแล้วทะลุกำแพงได้",
 }, flightPage)
 local flySpeedLabel = create("TextLabel", {
     Position = UDim2.fromOffset(46, 157), Size = UDim2.new(1, -92, 0, 36),
@@ -1160,12 +1160,51 @@ hoverController = buildHoverController({
     end,
 })
 -- Flight logic: retain the same controls and speed range as target-locator.lua.
+-- Collision state is indexed on flight start, not by a character/map scan each frame.
+local function buildFlightCollisionController(character)
+    local saved, ownedConnections = {}, {}
+    local active = false
+    local collision = {}
+    local function restore(part)
+        local original = saved[part]
+        saved[part] = nil
+        if original ~= nil then pcall(function() part.CanCollide = original end) end
+    end
+    local function add(part)
+        if not active or not part:IsA("BasePart") or not part:IsDescendantOf(character) then return end
+        if saved[part] == nil then saved[part] = part.CanCollide end
+        if part.CanCollide then part.CanCollide = false end
+    end
+    function collision.start()
+        if active then return end
+        active = true
+        ownedConnections[#ownedConnections + 1] = character.DescendantAdded:Connect(add)
+        ownedConnections[#ownedConnections + 1] = character.DescendantRemoving:Connect(function(part) restore(part) end)
+        for _, part in ipairs(character:GetDescendants()) do add(part) end
+    end
+    function collision.step()
+        if not active then return end
+        for part in pairs(saved) do
+            if not part.Parent or not part:IsDescendantOf(character) then restore(part)
+            elseif part.CanCollide then part.CanCollide = false end
+        end
+    end
+    function collision.stop()
+        active = false
+        for _, connection in ipairs(ownedConnections) do connection:Disconnect() end
+        table.clear(ownedConnections)
+        for part in pairs(saved) do restore(part) end
+    end
+    return collision
+end
+
 local flight, flyPressed, flySpeed = nil, {}, 70
 local function stopFlight(message)
     local previous = flight
     flight = nil
     table.clear(flyPressed)
     if previous then
+        if previous.collision then pcall(previous.collision.stop) end
         -- Destroy constraints before their attachment, including partially created sessions.
         for index = #previous.objects, 1, -1 do
             pcall(function() previous.objects[index]:Destroy() end)
@@ -1230,11 +1269,13 @@ local function startFlight()
     support.Parent = root
     flight.velocity, flight.orientation, flight.support = velocity, orientation, support
     flight.casting, flight.castFrame, flight.castPendingUntil = false, nil, 0
+    flight.collision = buildFlightCollisionController(character)
+    flight.collision.start()
     humanoid.AutoRotate, humanoid.PlatformStand = false, true
     root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
     orientation.Enabled, velocity.Enabled = true, true
     flyButton.Text, flyButton.BackgroundColor3 = "FLIGHT: ON — กดเพื่อหยุด", color.green
-    flyStatus.Text = "กำลังบิน • W/A/S/D + Space / Ctrl\nยุบหน้าต่างแล้วบินต่อได้"
+    flyStatus.Text = "กำลังบิน • W/A/S/D + Space / Ctrl\nบินทะลุกำแพงได้ • F1 ปิดบิน"
 end
 local function clearFlightInput()
     table.clear(flyPressed)
@@ -1334,6 +1375,18 @@ end))
 table.insert(connections, UserInputService.InputEnded:Connect(function(input)
     if hotkeys then hotkeys.finish(input) end
     flyPressed[input.KeyCode] = nil
+end))
+table.insert(connections, RunService.PreSimulation:Connect(function()
+    if closed or not flight or not flight.collision then return end
+    if player.Character ~= flight.character or flight.humanoid.Health <= 0 then
+        stopFlight("หยุดบินแล้ว • เปิดใหม่เมื่อตัวละครพร้อมครับ")
+        return
+    end
+    local ok, err = pcall(flight.collision.step)
+    if not ok then
+        stopFlight("หยุดบินเพราะ Error ของการชน • ดู Console")
+        warn("Auto Skill Flight collision:", err)
+    end
 end))
 table.insert(connections, RunService.RenderStepped:Connect(function()
     if closed or not flight then return end
