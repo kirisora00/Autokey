@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.21 — verified rubble hitboxes, safe AREA destinations and confirmed room entry.
+-- Auto Skill + NPC Hover + Flight v1.22 — lazy, budgeted indexing; no idle map/results scans.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.22", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -182,7 +182,7 @@ local hotkeyHint = create("TextLabel", {
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
-local hotkeys, autoEController, resultsController, progressController
+local hotkeys, autoEController, resultsController, progressController, indexer
 local routeObjects = {}
 local resultButtons, resultLabels = {}, {}
 local autoEPrompts, autoEVisible, autoECursor = {}, {}, nil
@@ -891,19 +891,6 @@ local function trackRouteObject(object)
         if name:find("rubble", 1, true) or name:find("area", 1, true) then routeObjects[object] = true end
     end
 end
-local function trackHumanoid(object)
-    trackRouteObject(object)
-    if object:IsA("Humanoid") or object:IsA("AnimationController") then
-        hoverHumanoids[object] = true
-    elseif object:IsA("Model") then
-        hoverModels[object] = true
-    elseif object:IsA("BillboardGui") then
-        hoverBillboards[object] = true
-    elseif object:IsA("ProximityPrompt") then
-        autoEPrompts[object] = true
-    end
-    dirtyGeometry(object)
-end
 local function trackPlate(object)
     if not object:IsDescendantOf(gui) then
         if object:IsA("GuiButton") then resultButtons[object] = true end
@@ -934,23 +921,168 @@ local function refreshHoverModels()
         if os.clock() - started >= 0.001 then break end
     end
 end
-table.insert(connections, workspace.DescendantAdded:Connect(trackHumanoid))
-table.insert(connections, workspace.DescendantRemoving:Connect(untrack))
-table.insert(connections, playerGui.DescendantAdded:Connect(trackPlate))
-table.insert(connections, playerGui.DescendantRemoving:Connect(untrack))
-for _, object in ipairs(workspace:GetDescendants()) do
-    -- Bootstrap only indexes classes. Geometry invalidation is for later changes.
-    trackRouteObject(object)
-    if object:IsA("Humanoid") or object:IsA("AnimationController") then hoverHumanoids[object] = true
-    elseif object:IsA("Model") then hoverModels[object] = true
-    elseif object:IsA("BillboardGui") then hoverBillboards[object] = true
-    elseif object:IsA("ProximityPrompt") then autoEPrompts[object] = true end
-end
-for _, object in ipairs(playerGui:GetDescendants()) do
-    if object:IsA("BillboardGui") then hoverBillboards[object] = true end
-    if not object:IsDescendantOf(gui) then
-        if object:IsA("GuiButton") then resultButtons[object] = true end
-        if object:IsA("TextLabel") or object:IsA("TextButton") then resultLabels[object] = true end
+-- Indexing is dormant at startup. Each active subsystem gets only its own classes.
+-- Tree traversal yields between frames, including very wide folders.
+do
+    local function buildBudgetWalker(deps)
+        local walk = {stack = {}, seen = setmetatable({}, {__mode = "k"})}
+        function walk.add(object)
+            if not object or walk.seen[object] or deps.skip(object) then return end
+            walk.seen[object] = true
+            walk.stack[#walk.stack + 1] = {object = object, cursor = 0}
+        end
+        function walk.remove(object) walk.seen[object] = nil end
+        function walk.clear()
+            table.clear(walk.stack)
+            table.clear(walk.seen)
+        end
+        function walk.pump(limit, deadline)
+            local visits = 0
+            for _ = 1, limit * 3 do
+                if visits >= limit or deps.clock() >= deadline then break end
+                local frame = walk.stack[#walk.stack]
+                if not frame then break end
+                if not frame.object.Parent and not deps.root(frame.object) then
+                    walk.stack[#walk.stack] = nil
+                elseif not frame.children then
+                    deps.visit(frame.object)
+                    -- One folder at a time; never allocate the entire descendant tree.
+                    frame.children = frame.object:GetChildren()
+                    visits = visits + 1
+                else
+                    frame.cursor = frame.cursor + 1
+                    local child = frame.children[frame.cursor]
+                    if child then walk.add(child)
+                    else walk.stack[#walk.stack] = nil end
+                end
+            end
+            return visits
+        end
+        function walk.pending() return #walk.stack > 0 end
+        return walk
+    end
+    local wants, forced, signals = {}, {}, {}
+    local worldWalk = buildBudgetWalker({
+        clock = os.clock, root = function(object) return object == workspace end,
+        skip = function() return false end,
+        visit = function(object)
+            if wants.route then trackRouteObject(object) end
+            if wants.hover then
+                if object:IsA("Humanoid") or object:IsA("AnimationController") then hoverHumanoids[object] = true
+                elseif object:IsA("Model") then hoverModels[object] = true end
+            end
+            if (wants.hover or wants.route) and object:IsA("BillboardGui") then hoverBillboards[object] = true end
+            if wants.e and object:IsA("ProximityPrompt") then autoEPrompts[object] = true end
+            if wants.hover or wants.route then dirtyGeometry(object) end
+        end,
+    })
+    local guiWalk = buildBudgetWalker({
+        clock = os.clock, root = function(object) return object == playerGui end,
+        skip = function(object) return object == gui or object:IsDescendantOf(gui) end,
+        visit = function(object)
+            if wants.gui then trackPlate(object) end
+        end,
+    })
+    local function disconnect(scope)
+        for _, connection in ipairs(signals[scope] or {}) do connection:Disconnect() end
+        signals[scope] = nil
+    end
+    local function seedWorld()
+        worldWalk.clear()
+        worldWalk.add(workspace)
+        -- Index likely actor folders first so targets can be found before decorative map parts.
+        local world = workspace:FindFirstChild("World")
+        for _, name in ipairs({"Enemies", "enemies", "Mobs", "NPCs", "Bosses"}) do
+            worldWalk.add(workspace:FindFirstChild(name))
+            if world then worldWalk.add(world:FindFirstChild(name)) end
+        end
+    end
+    local function seedGui()
+        guiWalk.clear()
+        guiWalk.add(playerGui)
+        for _, name in ipairs({"EndScreen", "RoundHUD", "NextAreaChip", "RubbleBar"}) do
+            guiWalk.add(playerGui:FindFirstChild(name))
+        end
+    end
+    indexer = {}
+    function indexer.step()
+        local now = os.clock()
+        local function requested(key, controller)
+            return controller and controller.state.enabled or (forced[key] or 0) > now
+        end
+        local nextWants = {
+            hover = requested("hover", hoverController),
+            e = requested("e", autoEController),
+            route = requested("route", progressController),
+            gui = requested("gui", resultsController),
+        }
+        nextWants.gui = nextWants.gui or nextWants.hover or nextWants.route
+        local worldActive = nextWants.hover or nextWants.e or nextWants.route
+        local rebuild = (nextWants.hover and not wants.hover) or (nextWants.e and not wants.e)
+            or (nextWants.route and not wants.route)
+        local rebuildGui = nextWants.gui and not wants.gui
+        if wants.hover and not nextWants.hover then
+            table.clear(hoverHumanoids) table.clear(hoverModels) modelCursor = nil
+        end
+        if wants.e and not nextWants.e then table.clear(autoEPrompts) autoECursor = nil end
+        if wants.route and not nextWants.route then table.clear(routeObjects) end
+        if not nextWants.hover and not nextWants.route then table.clear(hoverBillboards) end
+        if wants.gui and not nextWants.gui then
+            table.clear(resultButtons) table.clear(resultLabels)
+        end
+        wants = nextWants
+        if worldActive then
+            if not signals.world then
+                signals.world = {
+                    workspace.DescendantAdded:Connect(worldWalk.add),
+                    workspace.DescendantRemoving:Connect(function(object)
+                        worldWalk.remove(object) untrack(object)
+                    end),
+                }
+            end
+            if rebuild then seedWorld() end
+        else
+            disconnect("world")
+            worldWalk.clear()
+        end
+        if wants.gui then
+            if not signals.gui then
+                signals.gui = {
+                    playerGui.DescendantAdded:Connect(function(object)
+                        -- Structural label changes invalidate cached captions, but traversal stays budgeted.
+                        if resultsController then resultsController.dirty(object) end
+                        guiWalk.add(object)
+                    end),
+                    playerGui.DescendantRemoving:Connect(function(object)
+                        guiWalk.remove(object) untrack(object)
+                    end),
+                }
+            end
+            if rebuildGui then seedGui() end
+        else
+            disconnect("gui")
+            guiWalk.clear()
+        end
+        local deadline = os.clock() + 0.001
+        -- Reserve time for HUD indexing even while the world has a large backlog.
+        guiWalk.pump(12, math.min(deadline, os.clock() + 0.0004))
+        worldWalk.pump(24, deadline)
+    end
+    function indexer.scan(kind)
+        forced[kind] = os.clock() + 10
+        indexer.step()
+        local untilTime = os.clock() + 5
+        while not closed and (worldWalk.pending() or guiWalk.pending()) and os.clock() < untilTime do
+            task.wait(0.05) -- Heartbeat drains the index; never block the frame to finish a manual report.
+        end
+        if worldWalk.pending() or guiWalk.pending() then
+            warn("Autokey: index still loading; scan report may be partial. Scan again after a few seconds.")
+        end
+    end
+    function indexer.stop()
+        disconnect("world") disconnect("gui")
+        worldWalk.clear() guiWalk.clear()
+        table.clear(forced)
     end
 end
 
@@ -1650,6 +1782,8 @@ local function hoverDiagnostic(entries)
 end
 
 hoverScan.Activated:Connect(function()
+    indexer.scan("hover")
+    if closed then return end
     setHoverConfig()
     refreshHoverModels()
     local entries = hoverController.scan()
@@ -2197,6 +2331,15 @@ do
         end,
         error = function(err) warn("Auto Results:", err) end,
     })
+    function resultsController.monitor()
+        local screen = playerGui:FindFirstChild("EndScreen")
+        local holder = screen and screen:FindFirstChild("Holder")
+        local constrained = holder and holder:FindFirstChild("ConstraintedHolder")
+        local row = constrained and constrained:FindFirstChild("ButtonsHolder")
+        local frame = row and row:FindFirstChild("NextButton")
+        local button = frame and frame:FindFirstChild("Button")
+        resultsController.state.visible = button ~= nil and visible(button)
+    end
     function resultsController.dirty(object)
         if object:IsA("GuiButton") then captionCache[object] = nil return end
         if object:IsA("TextLabel") then
@@ -2209,6 +2352,8 @@ do
         end
     end
     scanButton.Activated:Connect(function()
+        indexer.scan("gui")
+        if closed then return end
         local found = findResult(resultsController.state.mode)
         local lines = {"Auto Results v1.16", "Found selected control: " .. (found and found:GetFullName() or "none")}
         lines[#lines + 1] = string.format("Mode=%s attempts=%d votes=%s visible=%s",
@@ -2711,6 +2856,8 @@ do
     end
     enable.Activated:Connect(progressController.toggle)
     scan.Activated:Connect(function()
+        indexer.scan("route")
+        if closed then return end
         local phase, area = objective()
         local rubble, marker = nearest("rubble"), nearest("area", area)
         local lines = {"Rubble / AREA scan v1.21", "Objective: " .. tostring(phase) .. " area=" .. tostring(area),
@@ -2941,20 +3088,42 @@ local nextTick = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if closed or os.clock() < nextTick then return end
     nextTick = os.clock() + 0.05
+    if not indexer.failed then
+        local okIndex, errIndex = pcall(indexer.step)
+        if not okIndex then
+            indexer.failed = true
+            indexer.stop()
+            warn("Autokey indexing stopped:", errIndex)
+        end
+    end
+    local active = controller.state.enabled or hoverController.state.enabled
+        or autoEController.state.enabled or resultsController.state.enabled or progressController.state.enabled
+    if not active then
+        resultsController.state.visible = false
+        return
+    end
     if progressController.state.enabled then
         local okRoute, errRoute = pcall(progressController.step)
         if not okRoute then progressController.stop() warn("Auto Route:", errRoute) end
     end
-    local okResult, errResult = pcall(resultsController.step)
-    if not okResult then resultsController.stop() warn("Auto Results:", errResult) end
+    if resultsController.state.enabled then
+        local okResult, errResult = pcall(resultsController.step)
+        if not okResult then resultsController.stop() warn("Auto Results:", errResult) end
+    else
+        -- Combat only needs the known screen's visibility, not button discovery or caption scans.
+        resultsController.monitor()
+    end
     if autoEController.state.enabled then
         local okE, errE = pcall(autoEController.step)
         if not okE then autoEController.stop() warn("Auto E:", errE) end
     end
-    local ok, err = pcall(controller.step)
-    if not ok then controller.stop() warn("Auto Skill 123:", err) end
+    if controller.state.enabled then
+        local ok, err = pcall(controller.step)
+        if not ok then controller.stop() warn("Auto Skill 123:", err) end
+    end
 end))
 session.stops = {
+    indexer.stop,
     hotkeys.clear,
     controller.dispose,
     autoEController.stop,
@@ -2974,3 +3143,4 @@ session.stops = {
     end,
 }
 if closed then cleanupSession() end
+
