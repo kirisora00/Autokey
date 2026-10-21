@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.27 — far AREA: hop closer and re-measure; no camera flip-flop on a visible chip.
+-- Auto Skill + NPC Hover + Flight v1.28 — Auto Start presses Yes on the pre-run "Start Game?" vote (F7).
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.27", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.28", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -177,12 +177,12 @@ local status = create("TextLabel", {
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 10,
-    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง",
+    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง • F7 เริ่ม",
 }, panel)
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
-local hotkeys, autoEController, resultsController, progressController, indexer
+local hotkeys, autoEController, resultsController, progressController, indexer, startController
 local routeObjects = {}
 local resultButtons, resultLabels = {}, {}
 local autoEPrompts, autoEVisible, autoECursor = {}, {}, nil
@@ -1017,7 +1017,7 @@ do
             hover = requested("hover", hoverController),
             e = requested("e", autoEController),
             route = requested("route", progressController),
-            gui = requested("gui", resultsController),
+            gui = requested("gui", resultsController) or requested("gui", startController),
         }
         nextWants.gui = nextWants.gui or nextWants.hover or nextWants.route
         local worldActive = nextWants.hover or nextWants.e or nextWants.route
@@ -2151,9 +2151,14 @@ do
         Text = "AUTO จบรอบ: OFF — กดเพื่อเริ่ม",
         TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
     }, resultsPage)
+    local startButton = create("TextButton", {
+        Position = UDim2.fromOffset(0, 230), Size = UDim2.new(1, 0, 0, 38),
+        BackgroundColor3 = color.blue, BorderSizePixel = 0,
+        Text = "AUTO START (Yes): OFF — F7", TextColor3 = color.text, TextSize = 15, Font = Enum.Font.GothamBold,
+    }, resultsPage)
     local info = create("TextLabel", {
-        Position = UDim2.fromOffset(0, 229), Size = UDim2.new(1, 0, 0, 108),
-        BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 14, TextWrapped = true,
+        Position = UDim2.fromOffset(0, 276), Size = UDim2.new(1, 0, 0, 70),
+        BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
         Text = "รอหน้าจอจบรอบ • ระบบเริ่มต้นปิดอยู่\nกดเฉพาะปุ่มที่เลือก ไม่กด Leave",
     }, resultsPage)
@@ -2508,6 +2513,93 @@ do
     nextButton.Activated:Connect(function() resultsController.select("next") end)
     retryButton.Activated:Connect(function() resultsController.select("retry") end)
     enableButton.Activated:Connect(resultsController.toggle)
+
+    -- Auto start: press Yes on the "Start Game? [0/1 VOTES]" panel shown before each run.
+    local function findStartVote()
+        for label in pairs(resultLabels) do
+            if visible(label) and normalizedText(label.Text):find("startgame", 1, true) then
+                -- The question, the vote count and the Yes button share one panel; widen the search a level at a time.
+                local panel, yes, current, maximum = label.Parent, nil, nil, nil
+                for _ = 1, 4 do
+                    if not panel or panel == playerGui then break end
+                    for _, object in ipairs(panel:GetDescendants()) do
+                        if (object:IsA("TextLabel") or object:IsA("TextButton")) and object.Text ~= "" and visible(object) then
+                            local text = normalizedText(object.Text)
+                            if not yes and text == "yes" then yes = object:IsA("TextButton") and object or controlForLabel(object) end
+                            local a, b = text:match("(%d+)/(%d+)vote")
+                            if a and not current then current, maximum = tonumber(a), tonumber(b) end
+                        end
+                    end
+                    if yes then return yes, current, maximum end
+                    panel = panel.Parent
+                end
+            end
+        end
+    end
+    local function buildStartController(deps)
+        local state = {enabled = false, seen = false, since = 0, attempts = 0, lastClick = -math.huge,
+            votes = nil, nextPoll = 0}
+        local auto = {state = state}
+        local function notify(message) deps.notify(state, message) end
+        function auto.start()
+            state.enabled, state.seen, state.nextPoll = true, false, 0
+            notify("เปิด Auto Start • รอหน้าต่าง Start Game?")
+        end
+        function auto.stop()
+            state.enabled = false
+            notify("หยุด Auto Start แล้ว")
+        end
+        function auto.toggle()
+            if state.enabled then auto.stop() else auto.start() end
+        end
+        function auto.step()
+            if not state.enabled or deps.clock() < state.nextPoll then return end
+            state.nextPoll = deps.clock() + 0.30
+            local yes, current, maximum = deps.find()
+            if not yes then
+                -- Keep the shared status line for the round-end automation while no vote panel is up.
+                state.seen = false
+                notify(nil)
+                return
+            end
+            if not state.seen then
+                state.seen, state.since, state.attempts, state.lastClick = true, deps.clock(), 0, -math.huge
+            end
+            if current and maximum and maximum > 0 and current >= maximum then notify("โหวตครบแล้ว • รอเกมเริ่ม") return end
+            local blocked = deps.blocked(yes)
+            if blocked then notify(blocked) return end
+            if deps.clock() - state.since < 0.5 or deps.clock() - state.lastClick < 3 then return end
+            -- Yes may be a toggle: only press again when the count shows our vote did not register.
+            if state.attempts >= 1 and (current == nil or state.votes == nil or current > state.votes) then
+                notify("กด Yes แล้ว • รอผู้เล่นอื่น / รอเกมเริ่ม")
+                return
+            end
+            if state.attempts >= 3 then notify("กด Yes 3 ครั้งแล้วเกมยังไม่นับ • กดเองได้ครับ") return end
+            state.attempts, state.lastClick, state.votes = state.attempts + 1, deps.clock(), current
+            local ok, err = pcall(deps.click, yes)
+            if ok then notify("กด Yes แล้ว • รอเกมนับโหวต")
+            else notify("ยังกด Yes ไม่ได้: " .. tostring(err):sub(1, 100)) end
+        end
+        return auto
+    end
+    startController = buildStartController({
+        clock = os.clock, find = findStartVote, click = clickResult,
+        blocked = function(button)
+            if closed or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
+                return "พัก Auto Start ระหว่างพิมพ์หรือเปิดเมนู Roblox"
+            end
+            local active = true
+            pcall(function() active = button.Interactable end)
+            if active == false then return "รอปุ่ม Yes พร้อมให้กด..." end
+        end,
+        notify = function(state, message)
+            if closed then return end
+            startButton.Text = state.enabled and "AUTO START (Yes): ON — F7" or "AUTO START (Yes): OFF — F7"
+            startButton.BackgroundColor3 = state.enabled and color.green or color.blue
+            if message and os.clock() >= infoHoldUntil and info.Text ~= message then info.Text = message end
+        end,
+    })
+    startButton.Activated:Connect(startController.toggle)
 end
 -- End results automation.
 
@@ -3279,6 +3371,7 @@ hotkeys = buildHotkeyController({
         [Enum.KeyCode.F4] = toggleAutoE,
         [Enum.KeyCode.F5] = resultsController.toggle,
         [Enum.KeyCode.F6] = progressController.toggle,
+        [Enum.KeyCode.F7] = startController.toggle,
     },
     blocked = function()
         return closed or not gameFocused() or GuiService.MenuIsOpen
@@ -3365,6 +3458,7 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
     end
     local active = controller.state.enabled or hoverController.state.enabled
         or autoEController.state.enabled or resultsController.state.enabled or progressController.state.enabled
+        or startController.state.enabled
     if not active then
         resultsController.state.visible = false
         return
@@ -3379,6 +3473,10 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
     else
         -- Combat only needs the known screen's visibility, not button discovery or caption scans.
         resultsController.monitor()
+    end
+    if startController.state.enabled then
+        local okStart, errStart = pcall(startController.step)
+        if not okStart then startController.stop() warn("Auto Start:", errStart) end
     end
     if autoEController.state.enabled then
         local okE, errE = pcall(autoEController.step)
@@ -3395,6 +3493,7 @@ session.stops = {
     controller.dispose,
     autoEController.stop,
     resultsController.stop,
+    startController.stop,
     function() progressController.stop(false) end,
     function() stopFlight("ปิดหน้าต่างแล้ว") end,
     function() if hoverController then hoverController.stop() end end,
