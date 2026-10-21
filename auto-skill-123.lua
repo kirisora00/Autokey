@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.32 — monster follow can't trigger the next room; returns to its start spot when done.
+-- Auto Skill + NPC Hover + Flight v1.33 — nearby AREA rings are walked into; teleports stop at the ring centre.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.32", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.33", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -2675,7 +2675,7 @@ do
     }, routePage)
     local function buildProgressController(deps)
         local state = {enabled = false, busy = false, phase = "idle", target = nil,
-            nextTick = 0, nextAttack = 0, enteredAt = 0, restore = nil, entryAttempts = 0,
+            nextTick = 0, nextAttack = 0, enteredAt = 0, restore = nil, entryAttempts = 0, entryWait = 2,
             brokenAt = 0, missingSince = nil, errors = 0}
         local auto = {state = state}
         local function notify(message) deps.notify(state, message) end
@@ -2780,7 +2780,7 @@ do
             elseif phase == "area" then
                 deps.release()
                 if state.phase == "entered" and (not area or state.target.area == area) then
-                    if deps.clock() - state.enteredAt < 2 then notify("กำลังเข้าวง AREA • รอเกมยืนยัน") return end
+                    if deps.clock() - state.enteredAt < state.entryWait then notify("กำลังเข้าวง AREA • รอเกมยืนยัน") return end
                     local marker = deps.marker(area)
                     if not marker then
                         -- Standing in the ring, the chip may vanish while the game waits on other players.
@@ -2793,7 +2793,7 @@ do
                     if approachFar(marker) then return end
                     state.target, state.enteredAt = marker, deps.clock()
                     state.entryAttempts = state.entryAttempts + 1
-                    deps.enter(marker)
+                    state.entryWait = deps.enter(marker, state.entryAttempts) or 2
                     notify("เกมยังให้เข้า AREA • ลองเข้าวงอีกครั้ง " .. state.entryAttempts)
                     return
                 end
@@ -2807,8 +2807,8 @@ do
                 if deps.motionReady and not deps.motionReady() then notify("รอท่าตีจบก่อนเข้าจุด AREA") return end
                 if approachFar(marker) then return end
                 state.phase, state.target, state.enteredAt, state.entryAttempts = "entered", marker, deps.clock(), 1
-                deps.enter(marker)
-                notify("กำลังเข้าวง AREA " .. tostring(marker.area or area or "") .. " • รอข้อความห้องเปลี่ยน")
+                state.entryWait = deps.enter(marker, 1) or 2
+                notify("กำลังเดิน/เข้าวง AREA " .. tostring(marker.area or area or "") .. " • รอข้อความห้องเปลี่ยน")
             else
                 if state.busy then finish(true) end
                 notify("รอจัดการมอน / ข้อความทางผ่านของห้องถัดไป")
@@ -3208,7 +3208,7 @@ do
         root.CFrame = CFrame.lookAt(start, start + flat.Unit)
         root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
     end
-    local function enter(marker)
+    local function enter(marker, attempt)
         local _, humanoid, root = ownCharacter()
         local point = marker.object and worldPosition(marker.object) or marker.position
         if not root or not point then error("ตำแหน่ง AREA หายไป") end
@@ -3217,14 +3217,24 @@ do
         if not floor then error("ไม่พบพื้นบริเวณวง AREA • กดสแกนส่งข้อมูลได้ครับ") end
         local height = humanoid.HipHeight + root.Size.Y * 0.5
         local direction = Vector3.new(floor.X - root.Position.X, 0, floor.Z - root.Position.Z)
+        local gap = direction.Magnitude
         if direction.Magnitude < 0.01 then direction = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z) end
         if direction.Magnitude < 0.01 then direction = Vector3.new(0, 0, -1) end
         direction = direction.Unit
+        -- Odd attempts walk, even ones teleport, so a walk blocked by a barricade still gets a teleport next.
+        if (attempt or 1) % 2 == 1 and gap <= 40 then
+            -- A nearby ring is entered by walking, like a player would. A teleport onto a rough estimate can land
+            -- in the game's out-of-bounds (TpBack) zone, which sends the player back to the same spot every time.
+            humanoid:MoveTo(floor + Vector3.new(0, height, 0))
+            return gap / math.max(humanoid.WalkSpeed, 8) + 1.5
+        end
         -- Arrive just before the ring and physically walk across it to trigger room entry.
         local start = floor - direction * 4 + Vector3.new(0, height, 0)
         root.CFrame = CFrame.lookAt(start, start + direction)
         root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
-        humanoid:MoveTo(floor + direction * 3 + Vector3.new(0, height, 0))
+        -- Stop at the ring's centre; walking past it can step into an out-of-bounds zone behind it.
+        humanoid:MoveTo(floor + Vector3.new(0, height, 0))
+        return 2
     end
     local infoUntil = 0
     progressController = buildProgressController({
