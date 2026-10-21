@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.30 — AREA search levels a sky-facing camera; rubble view no longer tilts up.
+-- Auto Skill + NPC Hover + Flight v1.31 — Auto Start ignores shadow-label duplicates; scan reports the vote panel.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.30", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.31", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -2475,11 +2475,15 @@ do
             end
         end
     end
+    local startReport -- filled in below, once the Auto Start controller exists
     scanButton.Activated:Connect(function()
         indexer.scan("gui")
         if closed then return end
         local found = findResult(resultsController.state.mode)
-        local lines = {"Auto Results v1.16", "Found selected control: " .. (found and found:GetFullName() or "none")}
+        local lines = {"Auto Results v1.31", "Found selected control: " .. (found and found:GetFullName() or "none")}
+        if startReport then
+            for _, line in ipairs(startReport()) do lines[#lines + 1] = line end
+        end
         lines[#lines + 1] = string.format("Mode=%s attempts=%d votes=%s visible=%s",
             resultsController.state.mode, resultsController.state.attempts,
             tostring(resultsController.state.lastVotes), tostring(resultsController.state.visible))
@@ -2515,9 +2519,13 @@ do
     enableButton.Activated:Connect(resultsController.toggle)
 
     -- Auto start: press Yes on the "Start Game? [0/1 VOTES]" panel shown before each run.
+    local function decorative(object)
+        local name = object.Name:lower()
+        return name:find("shadow", 1, true) or name:find("stroke", 1, true) or name:find("echo", 1, true)
+    end
     local function findStartVote()
         for label in pairs(resultLabels) do
-            if visible(label) and normalizedText(label.Text):find("startgame", 1, true) then
+            if not decorative(label) and visible(label) and normalizedText(label.Text):find("startgame", 1, true) then
                 -- The question, the vote count and the Yes button share one panel; widen the search a level at a time.
                 local panel, yes, current, maximum = label.Parent, nil, nil, nil
                 for _ = 1, 4 do
@@ -2525,7 +2533,9 @@ do
                     for _, object in ipairs(panel:GetDescendants()) do
                         if (object:IsA("TextLabel") or object:IsA("TextButton")) and object.Text ~= "" and visible(object) then
                             local text = normalizedText(object.Text)
-                            if not yes and text == "yes" then yes = object:IsA("TextButton") and object or controlForLabel(object) end
+                            if not yes and text == "yes" and not decorative(object) then
+                                yes = object:IsA("TextButton") and object or controlForLabel(object)
+                            end
                             local a, b = text:match("(%d+)/(%d+)vote")
                             if not a then a, b = text:match("^%[?(%d+)/(%d+)%]?$") end
                             if a and not current then current, maximum = tonumber(a), tonumber(b) end
@@ -2569,7 +2579,10 @@ do
             -- vote shows no count (or 0): a counted solo vote starts the run long before that.
             local stale = not full and state.attempts > 0 and (current == nil or current == 0)
                 and deps.clock() - state.lastClick > 20
-            if not state.seen or yes ~= state.control or stale then
+            -- Only a replaced panel counts as new: duplicate labels can hand back a different control each poll,
+            -- and resetting on every switch kept restarting the 0.5 s wait so Yes was never pressed.
+            local replaced = yes ~= state.control and (not state.control or deps.gone(state.control))
+            if not state.seen or replaced or stale then
                 state.seen, state.control, state.since, state.attempts, state.lastClick =
                     true, yes, deps.clock(), 0, -math.huge
             end
@@ -2592,6 +2605,7 @@ do
     end
     startController = buildStartController({
         clock = os.clock, find = findStartVote, click = clickResult,
+        gone = function(control) return not control.Parent or not visible(control) end,
         blocked = function(button)
             if closed or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
                 return "พัก Auto Start ระหว่างพิมพ์หรือเปิดเมนู Roblox"
@@ -2608,6 +2622,29 @@ do
         end,
     })
     startButton.Activated:Connect(startController.toggle)
+    startReport = function()
+        local s = startController.state
+        local yes, current, maximum = findStartVote()
+        local lines = {
+            string.format("Auto Start enabled=%s seen=%s attempts=%d votesAtClick=%s",
+                tostring(s.enabled), tostring(s.seen), s.attempts, tostring(s.votes)),
+            "Start Yes control: " .. (yes and (yes:GetFullName() .. " [" .. yes.ClassName .. "]") or "none")
+                .. " votes=" .. tostring(current) .. "/" .. tostring(maximum),
+        }
+        local count = 0
+        for label in pairs(resultLabels) do
+            local text = normalizedText(label.Text)
+            if text:find("start", 1, true) or text == "yes" or text:find("vote", 1, true) or text:find("waiting", 1, true) then
+                count = count + 1
+                if count <= 20 then
+                    lines[#lines + 1] = string.format("START %s | %s | '%s' | visible=%s",
+                        label.ClassName, label:GetFullName(), label.Text:sub(1, 80), tostring(visible(label)))
+                end
+            end
+        end
+        lines[#lines + 1] = "Start-related labels: " .. count
+        return lines
+    end
 end
 -- End results automation.
 
