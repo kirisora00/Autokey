@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.29 — Auto Start (F7) re-arms for every run's "Start Game?" vote.
+-- Auto Skill + NPC Hover + Flight v1.30 — AREA search levels a sky-facing camera; rubble view no longer tilts up.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.29", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.30", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -2911,10 +2911,19 @@ do
         local _, _, root = ownCharacter()
         if not camera or not root or camera.CameraType == Enum.CameraType.Scriptable or os.clock() < nextTurn then return end
         nextTurn = os.clock() + 0.5
-        -- Orbit the camera around the character; side 1 turns right, -1 turns left.
-        local yaw = CFrame.Angles(0, -side * math.rad(50), 0)
-        local position = root.Position + yaw * (camera.CFrame.Position - root.Position)
-        camera.CFrame = CFrame.lookAt(position, position + yaw * camera.CFrame.LookVector)
+        -- Orbit the camera around the character; side 1 turns right, -1 turns left, 0 only levels it.
+        -- Also level the pitch to a slight downward tilt: after the rubble the camera can be looking up at the
+        -- sky, and a ground ring then never enters the view however far it turns.
+        local look = camera.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude < 0.01 then flat = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z) end
+        if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
+        flat = CFrame.Angles(0, -side * math.rad(50), 0) * flat.Unit
+        local pitch = math.rad(-12)
+        look = flat * math.cos(pitch) + Vector3.yAxis * math.sin(pitch)
+        local focus = root.Position + Vector3.new(0, 2, 0)
+        local distance = math.clamp((camera.CFrame.Position - focus).Magnitude, 8, 30)
+        camera.CFrame = CFrame.lookAt(focus - look * distance, focus)
     end
     -- Strip only real rich-text tags; a bare "<" or ">" is the chip's off-screen arrow.
     local function chipText(text)
@@ -2939,6 +2948,12 @@ do
         if not frame or not title or not shown(title) then return nil end
         local area = tonumber(chipText(title.Text):upper():match("AREA%s*(%d+)"))
         if requestedArea and area ~= requestedArea then return nil end
+        local camera = workspace.CurrentCamera
+        if camera and (camera.CFrame.LookVector.Y > 0.25 or camera.CFrame.LookVector.Y < -0.75) then
+            -- Looking at the sky or straight down: level the view first so the projection and the arrow mean something.
+            turnCamera(0)
+            return nil
+        end
         local descendants = chip:GetDescendants()
         -- Prefer an actual world instance referenced by the indicator.
         for _, child in ipairs(descendants) do
@@ -2963,7 +2978,6 @@ do
             end
         end
         local _, _, root = ownCharacter()
-        local camera = workspace.CurrentCamera
         if not distance or not root or not camera then return nil end
         if area ~= previousArea then previousGoal, previousArea = nil, area end
         if distance <= 6 and previousGoal then
@@ -2976,7 +2990,8 @@ do
         local viewport, margin = camera.ViewportSize, 48
         if pixel.X < margin or pixel.X > viewport.X - margin or pixel.Y < margin or pixel.Y > viewport.Y - margin then
             -- An off-screen goal is pinned to the screen edge; that pixel is not on the ray to the ring.
-            turnCamera(pixel.X < viewport.X * 0.5 and -1 or 1)
+            -- Pinned to the top or bottom edge only needs the pitch levelled, not a turn.
+            turnCamera(pixel.X < margin and -1 or (pixel.X > viewport.X - margin and 1 or 0))
             return nil
         end
         -- AbsolutePosition is measured below the top bar unless the chip's ScreenGui ignores the inset.
@@ -3141,7 +3156,8 @@ do
         root.CFrame = CFrame.lookAt(point, Vector3.new(center.X, point.Y, center.Z))
         local camera = workspace.CurrentCamera
         if camera and camera.CameraType ~= Enum.CameraType.Scriptable then
-            camera.CFrame = CFrame.lookAt(point + direction * 12 + Vector3.new(0, 6, 0), center)
+            -- Aim at the rubble at our own height; its bounding-box centre can be high and tilt the view to the sky.
+            camera.CFrame = CFrame.lookAt(point + direction * 12 + Vector3.new(0, 6, 0), Vector3.new(center.X, point.Y + 1, center.Z))
         end
         root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
         return point
