@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.28 — Auto Start presses Yes on the pre-run "Start Game?" vote (F7).
+-- Auto Skill + NPC Hover + Flight v1.29 — Auto Start (F7) re-arms for every run's "Start Game?" vote.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.28", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.29", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -2527,6 +2527,7 @@ do
                             local text = normalizedText(object.Text)
                             if not yes and text == "yes" then yes = object:IsA("TextButton") and object or controlForLabel(object) end
                             local a, b = text:match("(%d+)/(%d+)vote")
+                            if not a then a, b = text:match("^%[?(%d+)/(%d+)%]?$") end
                             if a and not current then current, maximum = tonumber(a), tonumber(b) end
                         end
                     end
@@ -2562,10 +2563,17 @@ do
                 notify(nil)
                 return
             end
-            if not state.seen then
-                state.seen, state.since, state.attempts, state.lastClick = true, deps.clock(), 0, -math.huge
+            local full = current and maximum and maximum > 0 and current >= maximum
+            -- The game hides the panel between runs in a way that still reads as visible, so "panel gone" alone
+            -- never re-armed the next run. Also start fresh on a new Yes control, or when 20 s after our press the
+            -- vote shows no count (or 0): a counted solo vote starts the run long before that.
+            local stale = not full and state.attempts > 0 and (current == nil or current == 0)
+                and deps.clock() - state.lastClick > 20
+            if not state.seen or yes ~= state.control or stale then
+                state.seen, state.control, state.since, state.attempts, state.lastClick =
+                    true, yes, deps.clock(), 0, -math.huge
             end
-            if current and maximum and maximum > 0 and current >= maximum then notify("โหวตครบแล้ว • รอเกมเริ่ม") return end
+            if full then notify("โหวตครบแล้ว • รอเกมเริ่ม") return end
             local blocked = deps.blocked(yes)
             if blocked then notify(blocked) return end
             if deps.clock() - state.since < 0.5 or deps.clock() - state.lastClick < 3 then return end
