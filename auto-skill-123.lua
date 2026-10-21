@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.24 — smooth per-frame monster follow on real ground, no fling, under-monster mode.
+-- Auto Skill + NPC Hover + Flight v1.25 — VirtualInputManager is the default key mode.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.24", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.25", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -235,7 +235,8 @@ local function buildInputRouter(deps)
     local router = {modes = {"VirtualInputManager", "VirtualInput"}, modeIndex = 1}
     local activeMode, providers = {}, {}
     if type(deps.keypress) == "function" and type(deps.keyrelease) == "function" then
-        table.insert(router.modes, 1, "Native keys")
+        -- Last, not first: this game's skills only fire from VirtualInputManager, so that stays the default.
+        table.insert(router.modes, "Native keys")
     end
     function router.mode() return router.modes[router.modeIndex] end
     function router.effectiveMode()
@@ -299,7 +300,8 @@ local router = buildInputRouter({
         if selected and selected:IsDescendantOf(gui) then GuiService.SelectedObject = nil end
     end,
 })
-local previousIndex = previousInputMode and table.find(router.modes, previousInputMode)
+-- Older versions defaulted to Native keys, which never fires skills here; don't carry that choice over a reload.
+local previousIndex = previousInputMode ~= "Native keys" and previousInputMode and table.find(router.modes, previousInputMode)
 if previousIndex then router.modeIndex = previousIndex end
 gui:SetAttribute("InputModeChoice", router.mode())
 session.inputMode = router.mode()
