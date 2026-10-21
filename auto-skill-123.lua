@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.25 — VirtualInputManager is the default key mode.
+-- Auto Skill + NPC Hover + Flight v1.26 — off-screen AREA chip ("< AREA 2") turns the camera instead of a random warp.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.25", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.26", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -2799,12 +2799,28 @@ do
         local position = root.Position + yaw * (camera.CFrame.Position - root.Position)
         camera.CFrame = CFrame.lookAt(position, position + yaw * camera.CFrame.LookVector)
     end
+    -- Strip only real rich-text tags; a bare "<" or ">" is the chip's off-screen arrow.
+    local function chipText(text)
+        return (tostring(text or ""):gsub("</?%a[^>]*>", ""))
+    end
+    local function chipArrow(descendants, frame)
+        for _, child in ipairs(descendants) do
+            if (child:IsA("TextLabel") or child:IsA("TextButton")) and shown(child) then
+                local text = chipText(child.Text)
+                if text:find("<", 1, true) or text:find("←", 1, true) or text:find("◀", 1, true) then return -1 end
+                if text:find(">", 1, true) or text:find("→", 1, true) or text:find("▶", 1, true) then return 1 end
+            elseif child:IsA("GuiObject") and child.Name:lower():find("arrow", 1, true) and shown(child) then
+                local center = frame.AbsolutePosition.X + frame.AbsoluteSize.X * 0.5
+                return child.AbsolutePosition.X + child.AbsoluteSize.X * 0.5 < center and -1 or 1
+            end
+        end
+    end
     local function chipMarker(requestedArea)
         local chip = playerGui:FindFirstChild("NextAreaChip")
         local frame = chip and chip:FindFirstChild("Frame")
         local title = frame and frame:FindFirstChild("Title")
         if not frame or not title or not shown(title) then return nil end
-        local area = tonumber(cleanPlateText(title.Text):upper():match("AREA%s*(%d+)"))
+        local area = tonumber(chipText(title.Text):upper():match("AREA%s*(%d+)"))
         if requestedArea and area ~= requestedArea then return nil end
         local descendants = chip:GetDescendants()
         -- Prefer an actual world instance referenced by the indicator.
@@ -2812,6 +2828,14 @@ do
             if child:IsA("ObjectValue") and child.Value and safeAreaObject(child.Value) then
                 return {object = child.Value, position = worldPosition(child.Value), area = area, label = "NextAreaChip reference"}
             end
+        end
+        -- With the ring off-screen the chip sits at a clamped spot with an arrow ("< AREA 2"); projecting that
+        -- pixel lands somewhere random. Turn toward the arrow until the ring is in view instead.
+        local arrow = chipArrow(descendants, frame)
+        if arrow then
+            previousGoal = nil
+            turnCamera(arrow)
+            return nil
         end
         local distance
         for _, child in ipairs(descendants) do
