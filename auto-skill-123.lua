@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.31 — Auto Start ignores shadow-label duplicates; scan reports the vote panel.
+-- Auto Skill + NPC Hover + Flight v1.32 — monster follow can't trigger the next room; returns to its start spot when done.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.31", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.32", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -1445,19 +1445,25 @@ hoverController = buildHoverController({
 })
 -- Flight logic: retain the same controls and speed range as target-locator.lua.
 -- Collision state is indexed on flight start, not by a character/map scan each frame.
-local function buildFlightCollisionController(character)
-    local saved, ownedConnections = {}, {}
+local function buildFlightCollisionController(character, noTouch)
+    local saved, savedTouch, ownedConnections = {}, {}, {}
     local active = false
     local collision = {}
     local function restore(part)
-        local original = saved[part]
-        saved[part] = nil
+        local original, touch = saved[part], savedTouch[part]
+        saved[part], savedTouch[part] = nil, nil
         if original ~= nil then pcall(function() part.CanCollide = original end) end
+        if touch ~= nil then pcall(function() part.CanTouch = touch end) end
     end
     local function add(part)
         if not active or not part:IsA("BasePart") or not part:IsDescendantOf(character) then return end
         if saved[part] == nil then saved[part] = part.CanCollide end
         if part.CanCollide then part.CanCollide = false end
+        -- noTouch: gliding past a room's entry trigger must not register as entering that room.
+        if noTouch then
+            if savedTouch[part] == nil then savedTouch[part] = part.CanTouch end
+            if part.CanTouch then part.CanTouch = false end
+        end
     end
     function collision.start()
         if active then return end
@@ -1470,7 +1476,10 @@ local function buildFlightCollisionController(character)
         if not active then return end
         for part in pairs(saved) do
             if not part.Parent or not part:IsDescendantOf(character) then restore(part)
-            elseif part.CanCollide then part.CanCollide = false end
+            else
+                if part.CanCollide then part.CanCollide = false end
+                if noTouch and part.CanTouch then part.CanTouch = false end
+            end
         end
     end
     function collision.stop()
@@ -1686,32 +1695,20 @@ end))
 -- Follow body: glide toward the chosen spot every physics frame instead of 20 Hz snaps.
 -- Gravity is cancelled and the player's own parts stop colliding, so overlapping a monster or the floor cannot fling.
 local hoverBody
-local function placeOnSurface(body)
-    local root = body.root
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {body.character, body.model}
-    params.RespectCanCollide = true
-    local hit = workspace:Raycast(root.Position + Vector3.new(0, 60, 0), Vector3.new(0, -160, 0), params)
-    if hit then
-        root.CFrame = CFrame.new(hit.Position + Vector3.new(0, body.humanoid.HipHeight + root.Size.Y * 0.5, 0))
-            * root.CFrame.Rotation
-    else
-        root.CFrame = body.startFrame
-    end
-end
 releaseHoverBody = function()
     local body = hoverBody
     hoverBody, hoverGoal, switchWaitSince = nil, nil, nil
     if not body then return end
+    if body.root.Parent and body.humanoid.Health > 0 then
+        -- Go back to where following began, inside the current room, before touches return. The last monster can
+        -- die beside or past the rubble, and standing in the next room early stops its monsters from spawning.
+        -- This also lifts the player out from under the floor after "under" mode.
+        if (body.root.Position - body.startFrame.Position).Magnitude > 6 then body.root.CFrame = body.startFrame end
+        body.root.AssemblyLinearVelocity, body.root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+    end
     pcall(body.collision.stop)
     for index = #body.objects, 1, -1 do
         pcall(function() body.objects[index]:Destroy() end)
-    end
-    if body.root.Parent and body.humanoid.Health > 0 then
-        -- Never drop the player from below the floor into the void when following ends.
-        if body.underground then pcall(placeOnSurface, body) end
-        body.root.AssemblyLinearVelocity, body.root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
     end
 end
 acquireHoverBody = function()
@@ -1730,7 +1727,7 @@ acquireHoverBody = function()
     support.Force = Vector3.new(0, root.AssemblyMass * workspace.Gravity, 0)
     support.Parent = root
     body.objects, body.support = {attachment, support}, support
-    body.collision = buildFlightCollisionController(character)
+    body.collision = buildFlightCollisionController(character, true)
     body.collision.start()
     hoverBody = body
     return body
@@ -1760,7 +1757,6 @@ local function glideHover(dt)
             holdHover()
             return
         end
-        body.underground, body.model = goal.mode == "under", goal.entry.model
         local rotation = root.CFrame.Rotation
         if goal.mode == "front" or goal.mode == "back" then
             local aim = Vector3.new(goal.entry.part.Position.X, point.Y, goal.entry.part.Position.Z)
