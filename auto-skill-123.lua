@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.22 — lazy, budgeted indexing; no idle map/results scans.
+-- Auto Skill + NPC Hover + Flight v1.23 — route retries after transient errors, re-places at rubble, finds off-screen AREA.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.22", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.23", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -2423,14 +2423,22 @@ do
     }, routePage)
     local function buildProgressController(deps)
         local state = {enabled = false, busy = false, phase = "idle", target = nil,
-            nextTick = 0, nextAttack = 0, enteredAt = 0, restore = nil, entryAttempts = 0}
+            nextTick = 0, nextAttack = 0, enteredAt = 0, restore = nil, entryAttempts = 0,
+            brokenAt = 0, missingSince = nil, errors = 0}
         local auto = {state = state}
         local function notify(message) deps.notify(state, message) end
         local function finish(resume)
             deps.release()
             local restore = state.restore
             state.busy, state.restore, state.target, state.phase, state.placed = false, nil, nil, "idle", false
+            state.missingSince = nil
             if restore then restore(resume ~= false) end
+        end
+        local function markerMissing(message)
+            -- The NextAreaChip hides or pins itself to the edge while the ring is off-screen: turn the camera to find it.
+            state.missingSince = state.missingSince or deps.clock()
+            if deps.search and deps.clock() - state.missingSince > 1.5 then deps.search() end
+            notify(message)
         end
         local function own()
             if not state.busy then
@@ -2439,7 +2447,7 @@ do
             end
         end
         function auto.start()
-            state.enabled, state.nextTick = true, 0
+            state.enabled, state.nextTick, state.errors = true, 0, 0
             notify("เปิดทางผ่านแล้ว • รอจัดการมอนจนหินพร้อมให้ตี")
         end
         function auto.stop(resume)
@@ -2450,9 +2458,7 @@ do
         function auto.toggle()
             if state.enabled then auto.stop() else auto.start() end
         end
-        function auto.step()
-            if not state.enabled or deps.clock() < state.nextTick then return end
-            state.nextTick = deps.clock() + 0.20
+        local function tick()
             local ready, reason, reset = deps.ready()
             if not ready then
                 deps.release()
@@ -2463,12 +2469,16 @@ do
             local phase, area = deps.objective()
             if phase == "rubble" then
                 if state.phase == "waiting_area" then
-                    notify("หินแตกแล้ว • รอจุด AREA ปรากฏ")
-                    return
+                    -- The HUD can lag a moment; if it still asks for the rubble after that, the break was misread.
+                    if deps.clock() - state.brokenAt < 2.5 then
+                        notify("หินแตกแล้ว • รอจุด AREA ปรากฏ")
+                        return
+                    end
+                    state.phase, state.target = "idle", nil
                 end
                 if state.target and state.phase == "rubble" and not deps.alive(state.target) then
                     deps.release()
-                    state.phase, state.target = "waiting_area", nil
+                    state.phase, state.target, state.brokenAt = "waiting_area", nil, deps.clock()
                     notify("หินแตกแล้ว • รอจุด AREA")
                     return
                 end
@@ -2483,9 +2493,22 @@ do
                 end
                 if deps.motionReady and not deps.motionReady() then notify("รอท่าตี/สกิลจบ...") return end
                 if not state.placed then
-                    deps.front(state.target)
+                    state.placedPoint = deps.front(state.target)
                     state.placed, state.nextAttack = true, deps.clock() + 0.35
+                    state.lastHealth, state.progressAt = deps.health(state.target), deps.clock()
                     notify("ถึงหน้าหินแล้ว • เตรียมคลิกซ้าย")
+                    return
+                end
+                -- Knockback or a first placement made before the rubble finished loading leaves us swinging at air.
+                local health = deps.health(state.target)
+                if health and (not state.lastHealth or health < state.lastHealth) then
+                    state.lastHealth, state.progressAt = health, deps.clock()
+                end
+                local stalled = health ~= nil and deps.clock() - state.progressAt > 4
+                if stalled or deps.distance(state.placedPoint) > 10 then
+                    deps.release()
+                    state.placed = false
+                    notify(stalled and "ตีแล้ว HP หินไม่ลด • วาร์ปกลับหน้าหินใหม่" or "หลุดจากหน้าหิน • วาร์ปกลับ")
                     return
                 end
                 if deps.clock() >= state.nextAttack then
@@ -2498,7 +2521,13 @@ do
                 if state.phase == "entered" and (not area or state.target.area == area) then
                     if deps.clock() - state.enteredAt < 2 then notify("กำลังเข้าวง AREA • รอเกมยืนยัน") return end
                     local marker = deps.marker(area)
-                    if not marker then notify("ยังไม่เข้าห้อง • รอหาตำแหน่งวง AREA ใหม่") return end
+                    if not marker then
+                        -- Standing in the ring, the chip may vanish while the game waits on other players.
+                        if deps.distance(state.target.position) <= 8 then notify("อยู่ในวง AREA แล้ว • รอเกมเปลี่ยนห้อง") return end
+                        markerMissing("ยังไม่เข้าห้อง • หันกล้องหาวง AREA ใหม่")
+                        return
+                    end
+                    state.missingSince = nil
                     if deps.motionReady and not deps.motionReady() then return end
                     state.target, state.enteredAt = marker, deps.clock()
                     state.entryAttempts = state.entryAttempts + 1
@@ -2508,9 +2537,10 @@ do
                 end
                 local marker = deps.marker(area)
                 if not marker then
-                    notify("รอจุด AREA " .. tostring(area or "") .. " • ถ้ายังหาไม่เจอ กดสแกนเพื่อส่งข้อมูล")
+                    markerMissing("รอจุด AREA " .. tostring(area or "") .. " • หันกล้องหา / ถ้ายังไม่เจอ กดสแกนส่งข้อมูล")
                     return
                 end
+                state.missingSince = nil
                 own()
                 if deps.motionReady and not deps.motionReady() then notify("รอท่าตีจบก่อนเข้าจุด AREA") return end
                 state.phase, state.target, state.enteredAt, state.entryAttempts = "entered", marker, deps.clock(), 1
@@ -2520,6 +2550,23 @@ do
                 if state.busy then finish(true) end
                 notify("รอจัดการมอน / ข้อความทางผ่านของห้องถัดไป")
             end
+        end
+        function auto.step()
+            if not state.enabled or deps.clock() < state.nextTick then return end
+            state.nextTick = deps.clock() + 0.20
+            local ok, err = pcall(tick)
+            if ok then state.errors = 0 return end
+            -- A missing floor or a part that streamed out is usually back a moment later: retry instead of switching off.
+            deps.release()
+            state.errors = state.errors + 1
+            if state.errors >= 10 then
+                auto.stop()
+                notify("หยุดทางผ่าน: Error ซ้ำ 10 ครั้ง • " .. tostring(err):sub(1, 100))
+                if deps.error then deps.error(err) end
+                return
+            end
+            state.nextTick = deps.clock() + 1
+            notify("Error ชั่วคราว • ลองใหม่ " .. state.errors .. "/10\n" .. tostring(err):sub(1, 100))
         end
         return auto
     end
@@ -2622,6 +2669,17 @@ do
         end
         return second or first
     end
+    local nextTurn = 0
+    local function turnCamera(side)
+        local camera = workspace.CurrentCamera
+        local _, _, root = ownCharacter()
+        if not camera or not root or camera.CameraType == Enum.CameraType.Scriptable or os.clock() < nextTurn then return end
+        nextTurn = os.clock() + 0.5
+        -- Orbit the camera around the character; side 1 turns right, -1 turns left.
+        local yaw = CFrame.Angles(0, -side * math.rad(50), 0)
+        local position = root.Position + yaw * (camera.CFrame.Position - root.Position)
+        camera.CFrame = CFrame.lookAt(position, position + yaw * camera.CFrame.LookVector)
+    end
     local function chipMarker(requestedArea)
         local chip = playerGui:FindFirstChild("NextAreaChip")
         local frame = chip and chip:FindFirstChild("Frame")
@@ -2654,7 +2712,20 @@ do
         -- The UI's anchor is the projected marker. Distance constrains its world position.
         local pixel = frame.AbsolutePosition + Vector2.new(frame.AbsoluteSize.X * frame.AnchorPoint.X,
             frame.AbsoluteSize.Y * frame.AnchorPoint.Y)
-        local ray = camera:ScreenPointToRay(pixel.X, pixel.Y, 0)
+        local viewport, margin = camera.ViewportSize, 48
+        if pixel.X < margin or pixel.X > viewport.X - margin or pixel.Y < margin or pixel.Y > viewport.Y - margin then
+            -- An off-screen goal is pinned to the screen edge; that pixel is not on the ray to the ring.
+            turnCamera(pixel.X < viewport.X * 0.5 and -1 or 1)
+            return nil
+        end
+        -- AbsolutePosition is measured below the top bar unless the chip's ScreenGui ignores the inset.
+        local fullViewport = false
+        if chip:IsA("ScreenGui") then
+            local ok, insets = pcall(function() return chip.ScreenInsets end)
+            fullViewport = chip.IgnoreGuiInset or (ok and insets == Enum.ScreenInsets.None)
+        end
+        local ray = fullViewport and camera:ViewportPointToRay(pixel.X, pixel.Y, 0)
+            or camera:ScreenPointToRay(pixel.X, pixel.Y, 0)
         local position = rayDistancePoint(ray.Origin, ray.Direction, root.Position, distance + 0.5, previousGoal)
         if not position or math.abs(position.Y - root.Position.Y) > math.max(8, distance * 0.3) then return nil end
         local floor = ground(position)
@@ -2801,6 +2872,7 @@ do
             camera.CFrame = CFrame.lookAt(point + direction * 12 + Vector3.new(0, 6, 0), center)
         end
         root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+        return point
     end
     local function enter(marker)
         local _, humanoid, root = ownCharacter()
@@ -2825,6 +2897,14 @@ do
         clock = os.clock, objective = objective, rubble = function() return nearest("rubble") end,
         marker = function(area) return nearest("area", area) end,
         front = front, enter = enter, attack = attack, release = releaseMouse, takeControl = takeControl,
+        search = function() turnCamera(1) end,
+        health = function(target) return target.source and sourceHealth(target.source) or nil end,
+        distance = function(point)
+            local _, _, root = ownCharacter()
+            if not root or not point then return math.huge end
+            return Vector3.new(root.Position.X - point.X, 0, root.Position.Z - point.Z).Magnitude
+        end,
+        error = function(err) warn("Auto Route:", err) end,
         motionReady = function()
             local _, humanoid, root = ownCharacter()
             return root and not root.Anchored and not skillAnimationBusy(humanoid)
@@ -2860,7 +2940,7 @@ do
         if closed then return end
         local phase, area = objective()
         local rubble, marker = nearest("rubble"), nearest("area", area)
-        local lines = {"Rubble / AREA scan v1.21", "Objective: " .. tostring(phase) .. " area=" .. tostring(area),
+        local lines = {"Rubble / AREA scan v1.23", "Objective: " .. tostring(phase) .. " area=" .. tostring(area),
             "Objective label: " .. (objectiveLabel and objectiveLabel:GetFullName() or "none")}
         for _, item in ipairs({{name = "Rubble", target = rubble}, {name = "AREA", target = marker}}) do
             local t = item.target
