@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.26 — off-screen AREA chip ("< AREA 2") turns the camera instead of a random warp.
+-- Auto Skill + NPC Hover + Flight v1.27 — far AREA: hop closer and re-measure; no camera flip-flop on a visible chip.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.26", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.27", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -2565,6 +2565,15 @@ do
                 state.restore = deps.takeControl()
             end
         end
+        local function approachFar(marker)
+            -- A screen-projected ring hundreds of studs away is only roughly placed: hop most of the way, then
+            -- measure again from closer where the projection is accurate.
+            if not marker.estimated or (marker.distance or 0) <= 60 then return false end
+            deps.hop(marker)
+            state.phase, state.nextTick = "approach", deps.clock() + 0.35
+            notify(string.format("AREA %s อยู่ไกล %.0f studs • วาร์ปเข้าใกล้ก่อน", tostring(marker.area or ""), marker.distance))
+            return true
+        end
         function auto.start()
             state.enabled, state.nextTick, state.errors = true, 0, 0
             notify("เปิดทางผ่านแล้ว • รอจัดการมอนจนหินพร้อมให้ตี")
@@ -2648,6 +2657,7 @@ do
                     end
                     state.missingSince = nil
                     if deps.motionReady and not deps.motionReady() then return end
+                    if approachFar(marker) then return end
                     state.target, state.enteredAt = marker, deps.clock()
                     state.entryAttempts = state.entryAttempts + 1
                     deps.enter(marker)
@@ -2662,6 +2672,7 @@ do
                 state.missingSince = nil
                 own()
                 if deps.motionReady and not deps.motionReady() then notify("รอท่าตีจบก่อนเข้าจุด AREA") return end
+                if approachFar(marker) then return end
                 state.phase, state.target, state.enteredAt, state.entryAttempts = "entered", marker, deps.clock(), 1
                 deps.enter(marker)
                 notify("กำลังเข้าวง AREA " .. tostring(marker.area or area or "") .. " • รอข้อความห้องเปลี่ยน")
@@ -2771,6 +2782,12 @@ do
         local hit = workspace:Raycast(point + Vector3.new(0, 16, 0), Vector3.new(0, -100, 0), params)
         return hit and hit.Position or nil
     end
+    local function nearbyGround(position, root)
+        -- Far projections are tens of studs off vertically, often below the street; search the column from just
+        -- above the player's own height (under rooftops) instead of from the projected point.
+        local floor = ground(Vector3.new(position.X, root.Position.Y + 14, position.Z))
+        if floor and math.abs(floor.Y - root.Position.Y) <= 40 then return floor end
+    end
     local previousGoal, previousArea
     local function rayDistancePoint(origin, direction, playerPosition, distance, prior)
         local offset = origin - playerPosition
@@ -2850,7 +2867,8 @@ do
         if not distance or not root or not camera then return nil end
         if area ~= previousArea then previousGoal, previousArea = nil, area end
         if distance <= 6 and previousGoal then
-            return {position = previousGoal, area = area, estimated = true, label = "NextAreaChip projected ground"}
+            return {position = previousGoal, area = area, estimated = true, distance = distance,
+                label = "NextAreaChip projected ground"}
         end
         -- The UI's anchor is the projected marker. Distance constrains its world position.
         local pixel = frame.AbsolutePosition + Vector2.new(frame.AbsoluteSize.X * frame.AnchorPoint.X,
@@ -2871,10 +2889,21 @@ do
             or camera:ScreenPointToRay(pixel.X, pixel.Y, 0)
         local position = rayDistancePoint(ray.Origin, ray.Direction, root.Position, distance + 0.5, previousGoal)
         if not position or math.abs(position.Y - root.Position.Y) > math.max(8, distance * 0.3) then return nil end
-        local floor = ground(position)
-        if not floor then return nil end
+        local floor = nearbyGround(position, root)
+        if not floor then
+            -- Far rings may not be streamed in yet; the hop finds its own floor partway there.
+            if distance <= 60 then return nil end
+            floor = position
+        end
         previousGoal = floor
-        return {position = floor, area = area, estimated = true, label = "NextAreaChip projected ground"}
+        return {position = floor, area = area, estimated = true, distance = distance,
+            label = "NextAreaChip projected ground"}
+    end
+    local function chipShown()
+        local chip = playerGui:FindFirstChild("NextAreaChip")
+        local frame = chip and chip:FindFirstChild("Frame")
+        local title = frame and frame:FindFirstChild("Title")
+        return title ~= nil and shown(title)
     end
 
     local function nearest(kind, requestedArea)
@@ -3017,6 +3046,19 @@ do
         root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
         return point
     end
+    local function hop(marker)
+        local _, humanoid, root = ownCharacter()
+        if not root or not marker.position then error("ตำแหน่ง AREA หายไป") end
+        local flat = Vector3.new(marker.position.X - root.Position.X, 0, marker.position.Z - root.Position.Z)
+        if flat.Magnitude < 1 then error("ตำแหน่ง AREA ซ้อนกับตัวละคร") end
+        local step = math.min(flat.Magnitude * 0.7, flat.Magnitude - 30)
+        local point = root.Position + flat.Unit * step
+        local floor = nearbyGround(point, root)
+        if not floor then error("ไม่พบพื้นระหว่างทางไป AREA") end
+        local start = floor + Vector3.new(0, humanoid.HipHeight + root.Size.Y * 0.5, 0)
+        root.CFrame = CFrame.lookAt(start, start + flat.Unit)
+        root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+    end
     local function enter(marker)
         local _, humanoid, root = ownCharacter()
         local point = marker.object and worldPosition(marker.object) or marker.position
@@ -3040,7 +3082,9 @@ do
         clock = os.clock, objective = objective, rubble = function() return nearest("rubble") end,
         marker = function(area) return nearest("area", area) end,
         front = front, enter = enter, attack = attack, release = releaseMouse, takeControl = takeControl,
-        search = function() turnCamera(1) end,
+        -- A visible chip without an arrow is already in view; spinning away from it caused a left/right flip-flop.
+        search = function() if not chipShown() then turnCamera(1) end end,
+        hop = hop,
         health = function(target) return target.source and sourceHealth(target.source) or nil end,
         distance = function(point)
             local _, _, root = ownCharacter()
