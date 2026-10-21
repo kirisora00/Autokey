@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.23 — route retries after transient errors, re-places at rubble, finds off-screen AREA.
+-- Auto Skill + NPC Hover + Flight v1.24 — smooth per-frame monster follow on real ground, no fling, under-monster mode.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.23", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.24", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -519,16 +519,17 @@ create("TextLabel", {
     TextColor3 = color.muted, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 }, hoverPage)
 local hoverPositionButtons = {}
-for index, option in ipairs({{key = "head", label = "บนหัว"}, {key = "front", label = "ด้านหน้า"}, {key = "back", label = "ด้านหลัง"}}) do
+for index, option in ipairs({{key = "head", label = "บนหัว"}, {key = "front", label = "ด้านหน้า"},
+    {key = "back", label = "ด้านหลัง"}, {key = "under", label = "ใต้มอน"}}) do
     hoverPositionButtons[option.key] = create("TextButton", {
-        Position = UDim2.fromOffset((index - 1) * 106, 26), Size = UDim2.fromOffset(100, 30),
+        Position = UDim2.fromOffset((index - 1) * 79, 26), Size = UDim2.fromOffset(75, 30),
         BackgroundColor3 = index == 1 and color.blue or color.button, BorderSizePixel = 0,
         Text = option.label, TextColor3 = color.text, TextSize = 14,
     }, hoverPage)
 end
 create("TextLabel", {
     Position = UDim2.fromOffset(0, 64), Size = UDim2.fromOffset(205, 29),
-    BackgroundTransparency = 1, Text = "ความสูงบนหัว (studs)",
+    BackgroundTransparency = 1, Text = "สูงบนหัว / ลึกใต้มอน (studs)",
     TextColor3 = color.muted, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
 }, hoverPage)
 local hoverHeight = create("TextBox", {
@@ -576,7 +577,7 @@ local hoverStatus = create("TextLabel", {
     Position = UDim2.fromOffset(0, 271), Size = UDim2.new(1, 0, 0, 75),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 12, TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-    Text = "F2 เปิด/ปิดตามมอน • เลือกบนหัว/หน้า/หลัง\nระยะหน้า/หลังวัดจากขอบตัวมอน\nเปลี่ยนตำแหน่งได้ระหว่างเปิดอยู่",
+    Text = "F2 เปิด/ปิดตามมอน • เลือกบนหัว/หน้า/หลัง/ใต้\nระยะหน้า/หลังวัดจากขอบตัวมอน • ใต้มอนวัดจากพื้น\nเปลี่ยนตำแหน่งได้ระหว่างเปิดอยู่",
 }, hoverPage)
 local flightPage = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
@@ -1182,10 +1183,18 @@ local function targetAlive(entry)
     entry.part = part
     return true
 end
+local groundParams = RaycastParams.new()
+groundParams.FilterType = Enum.RaycastFilterType.Exclude
+groundParams.RespectCanCollide = true
+local function groundBelow(position, model, depth)
+    groundParams.FilterDescendantsInstances = {player.Character, model}
+    local hit = workspace:Raycast(position, Vector3.new(0, -depth, 0), groundParams)
+    return hit and hit.Position.Y or nil
+end
 local function destination(entry, height, mode, spacing)
     local root, head = targetParts(entry.model, entry.rigHumanoid)
     if not root then return nil end
-    if mode == "front" or mode == "back" then
+    if mode == "front" or mode == "back" or mode == "under" then
         local cached = rigCache[entry.model]
         local look = root.CFrame.LookVector
         local forward = Vector3.new(look.X, 0, look.Z)
@@ -1219,10 +1228,18 @@ local function destination(entry, height, mode, spacing)
         end
         local _, humanoid, playerRoot = ownCharacter()
         local playerHeight = (humanoid and humanoid.HipHeight or 0) + (playerRoot and playerRoot.Size.Y * 0.5 or 2)
+        local feet = root.Position.Y + cached.bottomOffset
+        if mode == "under" then
+            -- Measure depth from the floor the monster stands on, not from parts that may clip into it.
+            local floor = groundBelow(root.Position, entry.model, 60) or feet
+            return Vector3.new(root.Position.X, floor - height, root.Position.Z)
+        end
         local distance = (mode == "front" and cached.frontExtent or cached.backExtent) + (spacing or 6)
         local sign = mode == "front" and 1 or -1
         local point = root.Position + forward * (distance * sign)
-        return Vector3.new(point.X, root.Position.Y + cached.bottomOffset + playerHeight, point.Z)
+        -- The floor behind or in front can sit higher than the monster's lowest part: stand on the real ground.
+        local floor = groundBelow(Vector3.new(point.X, feet + 6, point.Z), entry.model, 30) or feet
+        return Vector3.new(point.X, floor + playerHeight, point.Z)
     end
     if head then
         if head:IsA("BasePart") then return head.Position + Vector3.new(0, head.Size.Y * 0.5 + height, 0) end
@@ -1260,6 +1277,7 @@ local function buildHoverController(deps)
     function hover.stop()
         state.enabled = false
         clearTarget()
+        deps.release()
         deps.releaseSkills()
         notify("หยุดตามมอนแล้ว • เดินได้ตามปกติ")
     end
@@ -1283,7 +1301,7 @@ local function buildHoverController(deps)
         local h, r = tonumber(height), tonumber(radius)
         if h and h == h then state.height = math.max(3, math.min(50, h)) end
         if r and r == r then state.radius = math.max(20, math.min(600, r)) end
-        if mode == "head" or mode == "front" or mode == "back" then state.mode = mode end
+        if mode == "head" or mode == "front" or mode == "back" or mode == "under" then state.mode = mode end
         local gap = tonumber(spacing)
         if gap and gap == gap then state.spacing = math.max(2, math.min(50, gap)) end
         if state.height ~= oldHeight or state.radius ~= oldRadius or state.mode ~= oldMode or state.spacing ~= oldSpacing then
@@ -1294,6 +1312,7 @@ local function buildHoverController(deps)
     function hover.suspendForRoute()
         clearTarget()
         state.nextScan = 0
+        deps.release()
         deps.releaseSkills()
     end
     function hover.readyForSkills()
@@ -1308,6 +1327,7 @@ local function buildHoverController(deps)
         local ready, reason = deps.playerReady()
         if not ready then
             state.ready, state.placedSince = false, nil
+            deps.release()
             deps.releaseSkills()
             notify(reason or "รอตัวละครพร้อม...")
             return
@@ -1332,6 +1352,7 @@ local function buildHoverController(deps)
             state.nextScan = deps.clock() + 0.40
             local entries = deps.scan(state.radius, skipped)
             if not entries[1] then
+                deps.release()
                 notify("ไม่มีมอนต่อสู้ในระยะ • รอเกิดชุดใหม่\nหยุดวาร์ปแล้ว • ขยับเองได้ตามปกติ • ระยะ " .. state.radius .. " studs")
                 return
             end
@@ -1356,9 +1377,13 @@ local function buildHoverController(deps)
     return hover
 end
 
+-- The follow body (anti-gravity + no own collision) is built after the flight collision helper below.
+local hoverGoal, switchWaitSince
+local acquireHoverBody, releaseHoverBody, holdHover
 hoverController = buildHoverController({
     clock = os.clock, scan = scanHoverTargets, alive = targetAlive,
     releaseSkills = controller.release,
+    release = function() releaseHoverBody() end,
     playerReady = function()
         if progressController and progressController.combatTransition and progressController.combatTransition() then
             hoverController.suspendForRoute()
@@ -1377,40 +1402,30 @@ hoverController = buildHoverController({
     follow = function(entry, height, switching, mode, spacing)
         local _, humanoid, root = ownCharacter()
         local point = destination(entry, height, mode, spacing)
-        if not root or not point then return false, "รอตำแหน่งมอนโหลด..." end
+        if not root or not point then holdHover() return false, "รอตำแหน่งมอนโหลด..." end
         if root.Anchored then return false, "รอเกมปลดล็อกตัวละครจากสกิล..." end
         if switching then
-            local animator = humanoid:FindFirstChildOfClass("Animator")
-            if animator then
-                for _, animation in ipairs(animator:GetPlayingAnimationTracks()) do
-                    local priority = animation.Priority
-                    local action = priority == Enum.AnimationPriority.Action or priority == Enum.AnimationPriority.Action2
-                        or priority == Enum.AnimationPriority.Action3 or priority == Enum.AnimationPriority.Action4
-                    if action and not animation.Looped and animation.IsPlaying then
-                        return false, "รอสกิลจบก่อนวาร์ปเปลี่ยนเป้าหมาย..."
-                    end
-                end
+            -- Let the current skill finish, but never wait forever on a long or chained animation.
+            if skillAnimationBusy(humanoid) then
+                switchWaitSince = switchWaitSince or os.clock()
+                if os.clock() - switchWaitSince < 0.6 then holdHover() return false, "รอสกิลจบก่อนเปลี่ยนเป้าหมาย..." end
+            end
+            switchWaitSince = nil
+            local camera = workspace.CurrentCamera
+            local direction = Vector3.new(entry.part.Position.X - point.X, 0, entry.part.Position.Z - point.Z)
+            if (mode == "front" or mode == "back") and camera and camera.CameraType ~= Enum.CameraType.Scriptable
+                and direction.Magnitude > 0.001 then
+                camera.CFrame = CFrame.lookAt(point - direction.Unit * 12 + Vector3.new(0, 5, 0), entry.part.Position)
             end
         end
-        if mode == "front" or mode == "back" then
-            local aim = Vector3.new(entry.part.Position.X, point.Y, entry.part.Position.Z)
-            root.CFrame = CFrame.lookAt(point, aim)
-            if switching then
-                local camera = workspace.CurrentCamera
-                local direction = aim - point
-                if camera and camera.CameraType ~= Enum.CameraType.Scriptable and direction.Magnitude > 0.001 then
-                    camera.CFrame = CFrame.lookAt(point - direction.Unit * 12 + Vector3.new(0, 5, 0), entry.part.Position)
-                end
-            end
-        else
-            root.CFrame = CFrame.new(point) * root.CFrame.Rotation
-        end
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
+        if not acquireHoverBody() then return false, "รอตัวละครพร้อม..." end
+        -- Movement itself runs every physics frame in glideHover; this only chooses where to go.
+        hoverGoal = {entry = entry, height = height, mode = mode, spacing = spacing}
         return true
     end,
     describe = function(entry, ready, mode)
-        local position = mode == "front" and "ด้านหน้า" or (mode == "back" and "ด้านหลัง" or "บนหัว")
+        local position = mode == "front" and "ด้านหน้า" or (mode == "back" and "ด้านหลัง"
+            or (mode == "under" and "ใต้มอน" or "บนหัว"))
         return string.format("เป้า: %s • %s\nHP: %.0f • %s\n%s",
             entry.displayName or entry.model.Name, position, sourceHealth(entry.source),
             ready and "ถึงตำแหน่งแล้ว" or "รอให้อยู่ในตำแหน่งก่อนกดสกิล", entry.path)
@@ -1666,16 +1681,118 @@ table.insert(connections, RunService.RenderStepped:Connect(function()
 end))
 -- End flight logic.
 
+-- Follow body: glide toward the chosen spot every physics frame instead of 20 Hz snaps.
+-- Gravity is cancelled and the player's own parts stop colliding, so overlapping a monster or the floor cannot fling.
+local hoverBody
+local function placeOnSurface(body)
+    local root = body.root
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {body.character, body.model}
+    params.RespectCanCollide = true
+    local hit = workspace:Raycast(root.Position + Vector3.new(0, 60, 0), Vector3.new(0, -160, 0), params)
+    if hit then
+        root.CFrame = CFrame.new(hit.Position + Vector3.new(0, body.humanoid.HipHeight + root.Size.Y * 0.5, 0))
+            * root.CFrame.Rotation
+    else
+        root.CFrame = body.startFrame
+    end
+end
+releaseHoverBody = function()
+    local body = hoverBody
+    hoverBody, hoverGoal, switchWaitSince = nil, nil, nil
+    if not body then return end
+    pcall(body.collision.stop)
+    for index = #body.objects, 1, -1 do
+        pcall(function() body.objects[index]:Destroy() end)
+    end
+    if body.root.Parent and body.humanoid.Health > 0 then
+        -- Never drop the player from below the floor into the void when following ends.
+        if body.underground then pcall(placeOnSurface, body) end
+        body.root.AssemblyLinearVelocity, body.root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+    end
+end
+acquireHoverBody = function()
+    local character, humanoid, root = ownCharacter()
+    if not root then return nil end
+    if hoverBody and hoverBody.root == root then return hoverBody end
+    releaseHoverBody()
+    local body = {character = character, humanoid = humanoid, root = root, startFrame = root.CFrame}
+    local attachment = Instance.new("Attachment")
+    attachment.Name, attachment.Parent = "AutoSkillHoverAttachment", root
+    local support = Instance.new("VectorForce")
+    support.Name = "AutoSkillHoverSupport"
+    support.Attachment0 = attachment
+    support.RelativeTo = Enum.ActuatorRelativeTo.World
+    support.ApplyAtCenterOfMass = true
+    support.Force = Vector3.new(0, root.AssemblyMass * workspace.Gravity, 0)
+    support.Parent = root
+    body.objects, body.support = {attachment, support}, support
+    body.collision = buildFlightCollisionController(character)
+    body.collision.start()
+    hoverBody = body
+    return body
+end
+holdHover = function()
+    local body = hoverBody
+    if body and not (hoverGoal and hoverGoal.hold) then hoverGoal = {hold = true, frame = body.root.CFrame} end
+end
+local function glideHover(dt)
+    local body, goal = hoverBody, hoverGoal
+    if not body then return end
+    if player.Character ~= body.character or not body.root:IsDescendantOf(workspace) or body.humanoid.Health <= 0 then
+        releaseHoverBody()
+        return
+    end
+    body.collision.step()
+    local root = body.root
+    body.support.Force = Vector3.new(0, root.AssemblyMass * workspace.Gravity, 0)
+    if not goal or root.Anchored then return end
+    local frame
+    if goal.hold then
+        frame = goal.frame
+    else
+        local point = destination(goal.entry, goal.height, goal.mode, goal.spacing)
+        -- A target that vanished or fell into the void must not drag the player off the map.
+        if not point or point.Y < workspace.FallenPartsDestroyHeight + 25 then
+            holdHover()
+            return
+        end
+        body.underground, body.model = goal.mode == "under", goal.entry.model
+        local rotation = root.CFrame.Rotation
+        if goal.mode == "front" or goal.mode == "back" then
+            local aim = Vector3.new(goal.entry.part.Position.X, point.Y, goal.entry.part.Position.Z)
+            if (aim - point).Magnitude > 0.001 then rotation = CFrame.lookAt(point, aim).Rotation end
+        end
+        -- Ease in over ~0.2 s; only a new target far away is reached with a single jump.
+        local offset = point - root.Position
+        local position = offset.Magnitude > 40 and point or root.Position + offset * (1 - math.exp(-18 * dt))
+        frame = CFrame.new(position) * rotation
+    end
+    root.CFrame = frame
+    root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+end
+table.insert(connections, RunService.PreSimulation:Connect(function(dt)
+    if closed or not hoverBody then return end
+    if progressController and progressController.state.busy then return end
+    local ok, err = pcall(glideHover, dt)
+    if not ok then
+        hoverController.stop()
+        hoverStatus.Text = "ตามมอนหยุดเพราะ Error: " .. tostring(err):sub(1, 150)
+        warn("NPC Hover glide:", err)
+    end
+end))
+
 local function setHoverConfig(mode)
     if type(mode) ~= "string" then mode = hoverController.state.mode end
     hoverController.configure(hoverHeight.Text, hoverRadius.Text, mode, hoverSpacing.Text)
     hoverHeight.Text = tostring(hoverController.state.height)
     hoverRadius.Text = tostring(hoverController.state.radius)
     hoverSpacing.Text = tostring(hoverController.state.spacing)
-    local onHead = hoverController.state.mode == "head"
-    hoverHeight.TextEditable, hoverSpacing.TextEditable = onHead, not onHead
-    hoverHeight.TextColor3 = onHead and color.text or color.muted
-    hoverSpacing.TextColor3 = onHead and color.muted or color.text
+    local vertical = hoverController.state.mode == "head" or hoverController.state.mode == "under"
+    hoverHeight.TextEditable, hoverSpacing.TextEditable = vertical, not vertical
+    hoverHeight.TextColor3 = vertical and color.text or color.muted
+    hoverSpacing.TextColor3 = vertical and color.muted or color.text
     for key, button in pairs(hoverPositionButtons) do
         button.BackgroundColor3 = key == hoverController.state.mode and color.blue or color.button
     end
