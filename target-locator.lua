@@ -1,4 +1,4 @@
--- Autokey v2.68 (Meditation: one input per accepted score round; delayed next-question readiness supports repeated letters)
+-- Autokey v2.69 (Raid: choose Bacon of Grudge / Dragon / Lava Titan; wait for the portal and re-step until entered)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -251,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.64",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.69",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.64" or "Anti-AFK: OFF  •  v2.64")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.69" or "Anti-AFK: OFF  •  v2.69")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -532,10 +532,18 @@ create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left,
 }, raidPage)
 local raidBossName = create("TextBox", {
-    Position = UDim2.fromOffset(118, 154), Size = UDim2.new(1, -118, 0, 28),
+    Position = UDim2.fromOffset(118, 154), Size = UDim2.new(1, -202, 0, 28),
     BackgroundColor3 = colors.active, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), TextSize = 14,
     Text = "Bacon of Grudge", ClearTextOnFocus = false,
+}, raidPage)
+-- Cycles the bosses listed in the game's Raid Boss window; the name also picks which entry's Open is pressed.
+-- Kept on the raid table: this chunk already has more than 200 top-level locals.
+raid.bossCycleButton = create("TextButton", {
+    Position = UDim2.new(1, -80, 0, 154), Size = UDim2.fromOffset(80, 28),
+    BackgroundColor3 = colors.blue, BorderSizePixel = 0,
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
+    TextSize = 12, Text = "สลับบอส",
 }, raidPage)
 create("TextLabel", {
     Position = UDim2.fromOffset(0, 186), Size = UDim2.fromOffset(280, 28),
@@ -2042,29 +2050,87 @@ local function buttonText(btn)
     return ""
 end
 
--- หา ปุ่ม Open ของหน้า "Raid Boss" (ตัวบนสุด = Bacon of Grudge)
-local function findRaidOpenButton()
+-- หา ปุ่ม Open ของบอสที่เลือกในหน้า "Raid Boss" (Bacon of Grudge / Dragon / ...)
+-- แต่ละบอสอยู่ในกรอบของตัวเอง: หาป้ายชื่อบอส แล้วไล่ขึ้นไปจนเจอกรอบที่มีปุ่ม Open แค่ปุ่มเดียว = ปุ่มของบอสนั้น
+-- (เดิมกดปุ่มบนสุดเสมอ จึงเปิดได้แค่ Bacon of Grudge) ถ้าหาชื่อไม่เจอ ใช้ปุ่มบนสุดแบบเดิม
+local function findRaidOpenButton(bossName)
+    local wanted = normalizeDuck(bossName or "")
+    local function openButtons(scope)
+        local found = {}
+        for _, obj in ipairs(scope:GetDescendants()) do
+            if obj:IsA("GuiButton") and guiVisible(obj) and normalizeDuck(buttonText(obj)) == "open" then
+                found[#found + 1] = obj
+            end
+        end
+        return found
+    end
     for _, label in ipairs(playerGui:GetDescendants()) do
         if label:IsA("TextLabel") and not label:IsDescendantOf(gui)
             and normalizeDuck(label.Text) == "raidboss" and guiVisible(label) then
-            local scope = label.Parent
+            local window = label.Parent
             for _ = 1, 6 do
-                if not scope or scope == playerGui then break end
-                local best
-                for _, obj in ipairs(scope:GetDescendants()) do
-                    if obj:IsA("GuiButton") and guiVisible(obj)
-                        and normalizeDuck(buttonText(obj)) == "open" then
-                        if not best or obj.AbsolutePosition.Y < best.AbsolutePosition.Y then
-                            best = obj
+                if not window or window == playerGui then break end
+                local buttons = openButtons(window)
+                if #buttons > 0 then
+                    if wanted ~= "" then
+                        for _, title in ipairs(window:GetDescendants()) do
+                            if title:IsA("TextLabel") and normalizeDuck(stripRichText(title.Text)) == wanted then
+                                local entry = title.Parent
+                                for _ = 1, 5 do
+                                    if not entry or entry == window then break end
+                                    local own = openButtons(entry)
+                                    if #own == 1 then return own[1], label end
+                                    if #own > 1 then break end
+                                    entry = entry.Parent
+                                end
+                            end
                         end
                     end
+                    local best
+                    for _, obj in ipairs(buttons) do
+                        if not best or obj.AbsolutePosition.Y < best.AbsolutePosition.Y then best = obj end
+                    end
+                    return best, label, wanted ~= ""
                 end
-                if best then return best, label end
-                scope = scope.Parent
+                window = window.Parent
             end
         end
     end
     return nil
+end
+
+-- เลื่อนรายการ (ScrollingFrame) ให้ปุ่มอยู่กลางกรอบ: ปุ่มของบอสตัวล่างๆ (Dragon) ต้องเลื่อนลงก่อนถึงจะกดจริงได้
+-- (ฟังก์ชันใหม่ของ Raid เก็บไว้ในตาราง raid เพราะไฟล์นี้มีตัวแปร local ระดับบนเกิน 200 ตัวแล้ว)
+function raid.scrollIntoView(button)
+    local frame = button:FindFirstAncestorOfClass("ScrollingFrame")
+    if not frame then return end
+    local offset = (button.AbsolutePosition.Y + button.AbsoluteSize.Y / 2)
+        - (frame.AbsolutePosition.Y + frame.AbsoluteSize.Y / 2)
+    local maxY = math.max(0, frame.AbsoluteCanvasSize.Y - frame.AbsoluteWindowSize.Y)
+    frame.CanvasPosition = Vector2.new(frame.CanvasPosition.X, math.clamp(frame.CanvasPosition.Y + offset, 0, maxY))
+end
+
+-- ชิ้นส่วนรอบจุดวงที่บันทึกไว้ (ไม่นับตัวผู้เล่น): ถ่ายไว้ก่อนกด Open แล้วเทียบหลังกด เพื่อรู้ว่าวงเกิดแล้วจริง
+function raid.ringParts()
+    local set = {}
+    if not raid.ringPose then return set end
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local characters = {}
+    for _, other in ipairs(Players:GetPlayers()) do
+        if other.Character then characters[#characters + 1] = other.Character end
+    end
+    params.FilterDescendantsInstances = characters
+    for _, part in ipairs(workspace:GetPartBoundsInRadius(raid.ringPose.Position, 14, params)) do set[part] = true end
+    return set
+end
+function raid.newRingParts(before)
+    local fresh = {}
+    if not before then return fresh end
+    for part in pairs(raid.ringParts()) do
+        if not before[part] then fresh[#fresh + 1] = part end
+    end
+    return fresh
 end
 
 -- ปิดหน้าต่าง (Raid Boss / Victory): กดปุ่ม X ของหน้าต่างนั้น; ถ้า hide=true หรือไม่พบปุ่ม จะซ่อนกรอบหน้าต่างแทน
@@ -2625,9 +2691,11 @@ local function raidRound(alive, pause, fight)
             -- บางจังหวะเกมจะข้ามหน้าต่าง Raid Boss ไปเลย แล้วขึ้นป้าย "Already Spawned" ทันที
             -- (ไม่มีปุ่ม Open ให้กดเลย) จึงต้องเช็คป้ายนี้ระหว่างรอ popup ด้วย
             deadline = os.clock() + (holdTry == 4 and 6 or 3)
+            local mismatch
             while alive() and os.clock() < deadline do
-                button, windowLabel = findRaidOpenButton()
-                if button then break end
+                -- Entries may still be filling in when the window appears: wait for the chosen boss's own row.
+                button, windowLabel, mismatch = findRaidOpenButton(raidBossName.Text)
+                if button and not mismatch then break end
                 if findSpawnedNotice() then
                     earlySpawnedNotice = true
                     break
@@ -2635,6 +2703,10 @@ local function raidRound(alive, pause, fight)
                 task.wait(0.15)
             end
             if not alive() then return "cancel" end
+            if button and mismatch then
+                -- Never fall back to the top Open: that would spend a Portal Gun on the wrong boss.
+                return "fail", "ไม่พบบอสชื่อ \"" .. raidBossName.Text .. "\" ในหน้า Raid Boss\nกดปุ่ม สลับบอส หรือพิมพ์ชื่อให้ตรงกับในเกม"
+            end
             if button or earlySpawnedNotice then break end
             if holdTry == 2 then
                 -- ครั้งที่ 2 ยังไม่ขึ้น: วาร์ปเข้าจุดกด E ใหม่อีกรอบ เผื่อยืนคลาดตำแหน่ง
@@ -2652,13 +2724,17 @@ local function raidRound(alive, pause, fight)
 
         local spawnedNotice = earlySpawnedNotice
         if button then
-            raidSay("กดปุ่ม Open...")
+            raidSay("กดปุ่ม Open (" .. raidBossName.Text .. ")...")
+            -- ปุ่มของบอสตัวล่าง (Dragon) อยู่นอกกรอบจนกว่าจะเลื่อนลง: เลื่อนให้เห็นก่อน เผื่อต้องคลิกจริง
+            pcall(raid.scrollIntoView, button)
+            if not pause(0.25) then return "cancel" end
+            raid.ringBefore = raid.ringParts()
             if not pressGuiButton(button) then
                 return "fail", "กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ"
             end
 
-            -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ
-            if not pause(0.4) then return "cancel" end
+            -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ (รอให้เกมรับการกด Open ก่อน ปิดเร็วไปบางทีเกมยังไม่ทันเปิดวง)
+            if not pause(0.8) then return "cancel" end
             for _ = 1, 3 do
                 if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
                 closeRaidWindow(windowLabel, pressGuiButton)
@@ -2695,18 +2771,62 @@ local function raidRound(alive, pause, fight)
     end
 
     -- 4) รอวงเปิด แล้ววาร์ปเข้าวง
+    -- (v2.69) เดิมรอแค่ 1 วิแล้ววาร์ปครั้งเดียว: ถ้าวงขึ้นช้า ตัวละครไปยืนรอก่อนวงเกิด เกมไม่นับว่าเหยียบวง
+    -- Portal Gun ถูกใช้ไปแต่ไม่ได้เข้าด่าน ตอนนี้รอวงเกิดจริง (มีชิ้นส่วนใหม่โผล่ที่จุดวง) แล้ววาร์ป
+    -- และถ้ายังไม่ถูกเกมย้ายเข้าด่าน จะก้าวออกแล้วเหยียบวงใหม่ซ้ำจนเข้าได้
     raidSay("รอวงวาร์ปเปิด...")
-    if not pause(1.0) then return "cancel" end
-    character, root = duckCharacter()
-    if not character then return "fail", "ตัวละครไม่พร้อมตอนเข้าวง" end
-    raidMoveTo(character, root, raid.ringPose)
-    raidSay("วาร์ปเข้าวงแล้ว...")
-    if not pause(1.2) then return "cancel" end
-    -- ถ้าโดนดันออกจากวงเล็กน้อย ให้วางกลับ (ถ้าถูกเกมย้ายไปไกลแล้วถือว่าเข้าด่านสำเร็จ)
-    character, root = duckCharacter()
-    if character then
-        local d = (root.Position - raid.ringPose.Position).Magnitude
-        if d > 6 and d < 40 then raidMoveTo(character, root, raid.ringPose) end
+    local ringNew = {}
+    local ringWait = os.clock() + 6
+    while alive() and os.clock() < ringWait do
+        ringNew = raid.newRingParts(raid.ringBefore)
+        if #ringNew > 0 then break end
+        task.wait(0.2)
+    end
+    if not alive() then return "cancel" end
+    if #ringNew == 0 then
+        -- ไม่เห็นวงใหม่ (วงอาจมีอยู่แล้วตลอด หรืออยู่นอกระยะโหลด): ทำแบบเดิม รอเพิ่มอีกนิดแล้ววาร์ป
+        if not pause(0.5) then return "cancel" end
+    end
+    local entered = false
+    local entryDeadline = os.clock() + 15
+    local entryTry = 0
+    while alive() and os.clock() < entryDeadline do
+        entryTry += 1
+        character, root = duckCharacter()
+        if character then
+            if entryTry > 1 then
+                -- ก้าวออกนอกวงก่อน แล้วค่อยกลับเข้า ให้เกมเห็นเป็นการเหยียบวงครั้งใหม่
+                raidMoveTo(character, root, raid.ringPose * CFrame.new(0, 0, 10))
+                if not pause(0.4) then return "cancel" end
+                character, root = duckCharacter()
+            end
+        end
+        if character then
+            raidMoveTo(character, root, raid.ringPose)
+            if typeof(firetouchinterest) == "function" then
+                for index = 1, math.min(#ringNew, 6) do
+                    pcall(firetouchinterest, root, ringNew[index], 0)
+                    pcall(firetouchinterest, root, ringNew[index], 1)
+                end
+            end
+        end
+        raidSay(entryTry == 1 and "วาร์ปเข้าวงแล้ว รอเกมพาเข้าด่าน..."
+            or ("ยังไม่ได้เข้าด่าน • เหยียบวงใหม่ (ครั้งที่ " .. entryTry .. ")"))
+        local checkUntil = os.clock() + 1.6
+        while alive() and os.clock() < checkUntil do
+            local _, rootNow = duckCharacter()
+            -- ถูกเกมย้ายไปไกลจากวง = เข้าด่านแล้ว หรือบอสโผล่ใกล้ตัว = อยู่ในด่านแล้ว
+            if rootNow and ((rootNow.Position - raid.ringPose.Position).Magnitude > 40 or findRaidBoss(rootNow, false)) then
+                entered = true
+                break
+            end
+            task.wait(0.2)
+        end
+        if entered or not alive() then break end
+    end
+    if not alive() then return "cancel" end
+    if not entered then
+        warn("Raid: ไม่เห็นการย้ายเข้าด่านหลังเหยียบวง " .. entryTry .. " ครั้ง (จะรอบอสต่อเผื่อด่านอยู่ที่เดียวกับวง)")
     end
     if not fight then return "done", "เปิด Raid และวาร์ปเข้าวงแล้ว" end
 
@@ -3053,6 +3173,17 @@ raidMax.FocusLost:Connect(function()
 end)
 raidBossName.FocusLost:Connect(function()
     if raid.running then raidStop("แก้ชื่อบอสแล้ว กดเริ่มใหม่เพื่อใช้ชื่อใหม่") end
+end)
+raid.bossCycleButton.Activated:Connect(function()
+    local RAID_BOSSES = {"Bacon of Grudge", "Dragon", "Lava Titan"} -- ลำดับเดียวกับหน้า Raid Boss ในเกม
+    local current = normalizeDuck(raidBossName.Text)
+    local nextIndex = 1
+    for index, name in ipairs(RAID_BOSSES) do
+        if normalizeDuck(name) == current then nextIndex = index % #RAID_BOSSES + 1 break end
+    end
+    raidBossName.Text = RAID_BOSSES[nextIndex]
+    if raid.running then raidStop("เปลี่ยนบอสเป็น " .. raidBossName.Text .. " แล้ว กดเริ่มใหม่") return end
+    raidStatus.Text = "บอส Raid: " .. raidBossName.Text .. " • จะกดปุ่ม Open ของบอสนี้"
 end)
 raidButton.Activated:Connect(function() startRaid(false) end)
 raidAutoButton.Activated:Connect(function() startRaid(true) end)
