@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.36 — Fullbright (F8, flight tab) brightens the map client-side.
+-- Auto Skill + NPC Hover + Flight v1.37 — walk-through noclip on foot (F9, flight tab).
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.36", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.37", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -177,7 +177,7 @@ local status = create("TextLabel", {
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 10, TextScaled = true,
-    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง • F7 เริ่ม • F8 สว่าง",
+    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง • F7 เริ่ม • F8 สว่าง • F9 ทะลุ",
 }, panel)
 create("UITextSizeConstraint", {MaxTextSize = 10}, hotkeyHint)
 local focused, closed, collapsed = true, false, false
@@ -619,9 +619,14 @@ local flyButton = create("TextButton", {
     TextSize = 17, Text = "FLIGHT: OFF — กดเพื่อบิน",
 }, flightPage)
 local brightButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 252), Size = UDim2.new(1, 0, 0, 30),
+    Position = UDim2.fromOffset(0, 252), Size = UDim2.new(0.5, -4, 0, 30),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    TextColor3 = color.text, TextSize = 14, Text = "แมพสว่าง: OFF — F8",
+    TextColor3 = color.text, TextSize = 12, Text = "แมพสว่าง: OFF — F8",
+}, flightPage)
+local noclipButton = create("TextButton", {
+    Position = UDim2.new(0.5, 4, 0, 252), Size = UDim2.new(0.5, -4, 0, 30),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    TextColor3 = color.text, TextSize = 12, Text = "เดินทะลุ: OFF — F9",
 }, flightPage)
 local flyStatus = create("TextLabel", {
     Position = UDim2.fromOffset(0, 290), Size = UDim2.new(1, 0, 0, 56),
@@ -1870,6 +1875,52 @@ do
     brightControl.toggle = toggleBright
     function brightControl.stop()
         if bright.enabled then bright.enabled = false restoreBright() end
+    end
+end
+
+-- Walk-through (noclip) without flight: the player's own parts stop colliding while the Humanoid keeps
+-- standing on floors, so walls and props are walked through on foot. Flight and monster follow save and
+-- restore collision on their own; this keeps its saved originals underneath theirs and restores them when off.
+local noclipControl = {}
+do
+    local noclip = {enabled = false, collision = nil, character = nil}
+    local function release()
+        if noclip.collision then pcall(noclip.collision.stop) end
+        noclip.collision, noclip.character = nil, nil
+    end
+    -- Flight and monster follow saved the parts as non-colliding; restoring under them would leave the
+    -- character stuck without collision once they end, so a switch-off waits until they are gone.
+    local function othersActive() return flight ~= nil or hoverBody ~= nil end
+    local function toggle()
+        noclip.enabled = not noclip.enabled
+        if not noclip.enabled and not othersActive() then release() end
+        noclipButton.Text = noclip.enabled and "เดินทะลุ: ON — F9" or "เดินทะลุ: OFF — F9"
+        noclipButton.BackgroundColor3 = noclip.enabled and color.green or color.button
+    end
+    noclipButton.Activated:Connect(toggle)
+    table.insert(connections, RunService.PreSimulation:Connect(function()
+        if closed then return end
+        if not noclip.enabled then
+            if noclip.collision and not othersActive() then release() end
+            return
+        end
+        local character = player.Character
+        if not character then release() return end
+        if noclip.character ~= character then
+            -- Start (or restart after a respawn) only while walking normally, so the saved values are real.
+            if othersActive() then return end
+            release()
+            noclip.collision, noclip.character = buildFlightCollisionController(character), character
+            noclip.collision.start()
+        end
+        -- The Humanoid turns torso collision back on every step, so enforce it before each simulation.
+        local ok, err = pcall(noclip.collision.step)
+        if not ok then warn("Walk-through:", err) end
+    end))
+    noclipControl.toggle = toggle
+    function noclipControl.stop()
+        noclip.enabled = false
+        release()
     end
 end
 
@@ -3532,6 +3583,7 @@ hotkeys = buildHotkeyController({
         [Enum.KeyCode.F6] = progressController.toggle,
         [Enum.KeyCode.F7] = startController.toggle,
         [Enum.KeyCode.F8] = brightControl.toggle,
+        [Enum.KeyCode.F9] = noclipControl.toggle,
     },
     blocked = function()
         return closed or not gameFocused() or GuiService.MenuIsOpen
@@ -3658,6 +3710,7 @@ session.stops = {
     function() progressController.stop(false) end,
     function() stopFlight("ปิดหน้าต่างแล้ว") end,
     function() if hoverController then hoverController.stop() end end,
+    noclipControl.stop, -- after flight and follow, so its saved collision is restored last
     function()
         table.clear(hoverHumanoids)
         table.clear(hoverModels)
