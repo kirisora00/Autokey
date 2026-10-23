@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.33 — nearby AREA rings are walked into; teleports stop at the ring centre.
+-- Auto Skill + NPC Hover + Flight v1.34 — flight cast hold lasts at most 1 s and yields to movement keys.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.33", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.34", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -1592,10 +1592,19 @@ local function stepFlight()
         return
     end
     -- Only a captured skill key arms the cast lock; unrelated idle/action poses must not freeze flight.
-    local casting = os.clock() < f.castPendingUntil or f.root.Anchored
-        or (f.castFrame ~= nil and skillAnimationBusy(f.humanoid))
+    -- The lock never outlasts 1 s and gives way to held movement keys: a long or repeating Action animation
+    -- (auras, Auto Skill every second) kept snapping the player back to where the cast began.
+    local now = os.clock()
+    local steering = gameFocused() and (flyPressed[Enum.KeyCode.W] or flyPressed[Enum.KeyCode.A]
+        or flyPressed[Enum.KeyCode.S] or flyPressed[Enum.KeyCode.D] or flyPressed[Enum.KeyCode.Space]
+        or flyPressed[Enum.KeyCode.LeftControl] or flyPressed[Enum.KeyCode.RightControl])
+    local expired = f.castStarted ~= nil and now - f.castStarted > 1
+    local casting = f.root.Anchored or (not steering and not expired and (now < f.castPendingUntil
+        or (f.castFrame ~= nil and skillAnimationBusy(f.humanoid))))
     if casting ~= f.casting then
         f.casting = casting
+        f.castStarted = casting and now or nil
+        if not casting then f.castPendingUntil = 0 end
         f.velocity.Enabled, f.orientation.Enabled = not casting, not casting
         if casting then f.humanoid.PlatformStand = f.platformStand
         else f.humanoid.PlatformStand = true end
