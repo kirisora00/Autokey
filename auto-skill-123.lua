@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.34 — flight cast hold lasts at most 1 s and yields to movement keys.
+-- Auto Skill + NPC Hover + Flight v1.35 — flight reports game pull-backs and lowers its speed after each one.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.34", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.35", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -1624,8 +1624,23 @@ local function stepFlight()
         if f.castFrame then f.root.CFrame = f.castFrame end
         f.root.AssemblyLinearVelocity = Vector3.zero
         f.root.AssemblyAngularVelocity = Vector3.zero
+        f.lastPosition, f.lastAt = f.root.Position, now
         return
     end
+    -- A jump far beyond what this speed can cover in one frame is the game moving us, not flight: usually a
+    -- server speed check snapping the player back. Report it and slow down so later flights stay accepted.
+    local position = f.root.Position
+    if f.lastPosition then
+        local jump = (position - f.lastPosition).Magnitude
+        if jump > flySpeed * (now - f.lastAt) * 3 + 12 then
+            f.pullbacks = (f.pullbacks or 0) + 1
+            flySpeed = math.max(20, flySpeed - 10)
+            flySpeedLabel.Text = "Speed: " .. flySpeed .. " studs/s"
+            flyStatus.Text = string.format("เกมดึงตัวกลับ %.0f studs (ครั้งที่ %d)\nลดความเร็วบินเหลือ %d studs/s อัตโนมัติ",
+                jump, f.pullbacks, flySpeed)
+        end
+    end
+    f.lastPosition, f.lastAt = position, now
     local camera = workspace.CurrentCamera
     if not camera then f.velocity.VectorVelocity = Vector3.zero return end
     local look = camera.CFrame.LookVector
