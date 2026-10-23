@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.37 — walk-through noclip on foot (F9, flight tab).
+-- Auto Skill + NPC Hover + Flight v1.38 — menu tab with every feature's ON/OFF; walk-through no longer on F9.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.37", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.38", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -80,40 +80,50 @@ local close = create("TextButton", {
     BackgroundColor3 = Color3.fromRGB(145, 49, 62), BorderSizePixel = 0,
     Text = "X", TextColor3 = color.text, TextSize = 16,
 }, panel)
-local skillTab = create("TextButton", {
-    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(49, 31),
+-- Seven tabs, 42 px wide with a 3 px gap; the menu (every feature's ON/OFF in one place) opens first.
+local menuTab = create("TextButton", {
+    Position = UDim2.fromOffset(14, 49), Size = UDim2.fromOffset(42, 31),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
-    Text = "Skill", TextColor3 = color.text, TextSize = 12,
+    Text = "เมนู", TextColor3 = color.text, TextSize = 12,
+}, panel)
+local skillTab = create("TextButton", {
+    Position = UDim2.fromOffset(59, 49), Size = UDim2.fromOffset(42, 31),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "Skill", TextColor3 = color.text, TextSize = 11,
 }, panel)
 local hoverTab = create("TextButton", {
-    Position = UDim2.fromOffset(66, 49), Size = UDim2.fromOffset(49, 31),
+    Position = UDim2.fromOffset(104, 49), Size = UDim2.fromOffset(42, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "ตามมอน", TextColor3 = color.text, TextSize = 11,
+    Text = "ตามมอน", TextColor3 = color.text, TextSize = 10,
 }, panel)
 local flightTab = create("TextButton", {
-    Position = UDim2.fromOffset(118, 49), Size = UDim2.fromOffset(49, 31),
+    Position = UDim2.fromOffset(149, 49), Size = UDim2.fromOffset(42, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "บิน", TextColor3 = color.text, TextSize = 12,
+    Text = "บิน", TextColor3 = color.text, TextSize = 11,
 }, panel)
 local autoETab = create("TextButton", {
-    Position = UDim2.fromOffset(170, 49), Size = UDim2.fromOffset(49, 31),
+    Position = UDim2.fromOffset(194, 49), Size = UDim2.fromOffset(42, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "Auto E", TextColor3 = color.text, TextSize = 12,
+    Text = "Auto E", TextColor3 = color.text, TextSize = 10,
 }, panel)
 local resultsTab = create("TextButton", {
-    Position = UDim2.fromOffset(222, 49), Size = UDim2.fromOffset(49, 31),
+    Position = UDim2.fromOffset(239, 49), Size = UDim2.fromOffset(42, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "จบรอบ", TextColor3 = color.text, TextSize = 12,
+    Text = "จบรอบ", TextColor3 = color.text, TextSize = 11,
 }, panel)
 local routeTab = create("TextButton", {
-    Position = UDim2.fromOffset(274, 49), Size = UDim2.fromOffset(49, 31),
+    Position = UDim2.fromOffset(284, 49), Size = UDim2.fromOffset(42, 31),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    Text = "หิน/ทาง", TextColor3 = color.text, TextSize = 11,
+    Text = "หิน/ทาง", TextColor3 = color.text, TextSize = 10,
 }, panel)
 local resultsPage, routePage
-local content = create("Frame", {
+local menuPage = create("Frame", {
     Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
     BackgroundTransparency = 1,
+}, panel)
+local content = create("Frame", {
+    Position = UDim2.fromOffset(14, 92), Size = UDim2.new(1, -28, 0, 346),
+    BackgroundTransparency = 1, Visible = false,
 }, panel)
 create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 37), BackgroundTransparency = 1,
@@ -177,7 +187,7 @@ local status = create("TextLabel", {
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 10, TextScaled = true,
-    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง • F7 เริ่ม • F8 สว่าง • F9 ทะลุ",
+    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง • F7 เริ่ม • F8 สว่าง",
 }, panel)
 create("UITextSizeConstraint", {MaxTextSize = 10}, hotkeyHint)
 local focused, closed, collapsed = true, false, false
@@ -626,7 +636,7 @@ local brightButton = create("TextButton", {
 local noclipButton = create("TextButton", {
     Position = UDim2.new(0.5, 4, 0, 252), Size = UDim2.new(0.5, -4, 0, 30),
     BackgroundColor3 = color.button, BorderSizePixel = 0,
-    TextColor3 = color.text, TextSize = 12, Text = "เดินทะลุ: OFF — F9",
+    TextColor3 = color.text, TextSize = 12, Text = "เดินทะลุ: OFF",
 }, flightPage)
 local flyStatus = create("TextLabel", {
     Position = UDim2.fromOffset(0, 290), Size = UDim2.new(1, 0, 0, 56),
@@ -1873,6 +1883,7 @@ do
         pcall(applyBright)
     end))
     brightControl.toggle = toggleBright
+    function brightControl.enabled() return bright.enabled end
     function brightControl.stop()
         if bright.enabled then bright.enabled = false restoreBright() end
     end
@@ -1894,7 +1905,7 @@ do
     local function toggle()
         noclip.enabled = not noclip.enabled
         if not noclip.enabled and not othersActive() then release() end
-        noclipButton.Text = noclip.enabled and "เดินทะลุ: ON — F9" or "เดินทะลุ: OFF — F9"
+        noclipButton.Text = noclip.enabled and "เดินทะลุ: ON" or "เดินทะลุ: OFF"
         noclipButton.BackgroundColor3 = noclip.enabled and color.green or color.button
     end
     noclipButton.Activated:Connect(toggle)
@@ -1918,6 +1929,7 @@ do
         if not ok then warn("Walk-through:", err) end
     end))
     noclipControl.toggle = toggle
+    function noclipControl.enabled() return noclip.enabled end
     function noclipControl.stop()
         noclip.enabled = false
         release()
@@ -3490,10 +3502,12 @@ do
 end
 -- End rubble / AREA progression.
 
-local activePage = "skills"
+local activePage = "menu"
 local function showWindowPage(name)
     activePage = name
     hotkeyHint.Visible = not collapsed
+    menuPage.Visible = not collapsed and name == "menu"
+    menuTab.BackgroundColor3 = name == "menu" and color.blue or color.button
     content.Visible = not collapsed and name == "skills"
     hoverPage.Visible = not collapsed and name == "hover"
     flightPage.Visible = not collapsed and name == "flight"
@@ -3507,6 +3521,7 @@ local function showWindowPage(name)
     resultsTab.BackgroundColor3 = name == "results" and color.blue or color.button
     routeTab.BackgroundColor3 = name == "route" and color.blue or color.button
 end
+menuTab.Activated:Connect(function() showWindowPage("menu") end)
 skillTab.Activated:Connect(function() showWindowPage("skills") end)
 hoverTab.Activated:Connect(function() showWindowPage("hover") end)
 flightTab.Activated:Connect(function() showWindowPage("flight") end)
@@ -3583,7 +3598,7 @@ hotkeys = buildHotkeyController({
         [Enum.KeyCode.F6] = progressController.toggle,
         [Enum.KeyCode.F7] = startController.toggle,
         [Enum.KeyCode.F8] = brightControl.toggle,
-        [Enum.KeyCode.F9] = noclipControl.toggle,
+        -- No F9: Roblox opens its developer console on it. Walk-through is in the menu and the flight tab.
     },
     blocked = function()
         return closed or not gameFocused() or GuiService.MenuIsOpen
@@ -3591,6 +3606,55 @@ hotkeys = buildHotkeyController({
     end,
     error = function(err) warn("Auto Skill Hotkey:", err) end,
 })
+-- Menu: every feature's live ON/OFF in one place; each row calls the same handler as its tab or hotkey.
+do
+    local rows = {
+        {label = "บิน", key = "F1", toggle = toggleFlight, on = function() return flight ~= nil end},
+        {label = "ตามมอน", key = "F2", toggle = toggleHover, on = function() return hoverController.state.enabled end},
+        {label = "Auto Skill 1-2-3", key = "F3", toggle = toggleSkills, on = function() return controller.state.enabled end},
+        {label = "Auto E", key = "F4", toggle = toggleAutoE, on = function() return autoEController.state.enabled end},
+        {label = "Auto จบรอบ", key = "F5", toggle = resultsController.toggle,
+            on = function() return resultsController.state.enabled end},
+        {label = "ทางผ่าน หิน/AREA", key = "F6", toggle = progressController.toggle,
+            on = function() return progressController.state.enabled end},
+        {label = "Auto Start (Yes)", key = "F7", toggle = startController.toggle,
+            on = function() return startController.state.enabled end},
+        {label = "แมพสว่าง", key = "F8", toggle = brightControl.toggle, on = brightControl.enabled},
+        {label = "เดินทะลุ", toggle = noclipControl.toggle, on = noclipControl.enabled},
+    }
+    for index, row in ipairs(rows) do
+        local y = (index - 1) * 38
+        create("TextLabel", {
+            Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, -110, 0, 34), BackgroundTransparency = 1,
+            Text = row.label .. (row.key and ("  (" .. row.key .. ")") or ""), TextColor3 = color.text,
+            TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+        }, menuPage)
+        row.button = create("TextButton", {
+            Position = UDim2.new(1, -100, 0, y + 2), Size = UDim2.fromOffset(100, 30),
+            BackgroundColor3 = color.button, BorderSizePixel = 0, Text = "OFF",
+            TextColor3 = color.text, TextSize = 14, Font = Enum.Font.GothamBold,
+        }, menuPage)
+        row.button.Activated:Connect(function()
+            focused = true
+            local ok, err = pcall(row.toggle)
+            if not ok then warn("Autokey menu:", err) end
+        end)
+    end
+    local nextRender = 0
+    table.insert(connections, RunService.Heartbeat:Connect(function()
+        if closed or not menuPage.Visible or os.clock() < nextRender then return end
+        nextRender = os.clock() + 0.2
+        for _, row in ipairs(rows) do
+            local ok, on = pcall(row.on)
+            on = ok and on == true
+            local text = on and "ON" or "OFF"
+            if row.button.Text ~= text then
+                row.button.Text = text
+                row.button.BackgroundColor3 = on and color.green or color.button
+            end
+        end
+    end))
+end
 -- Shortcuts share the existing input handlers; no additional input listeners or polling loop.
 modeButton.Activated:Connect(function()
     controller.stop()
@@ -3608,7 +3672,9 @@ slower.Activated:Connect(function() changeInterval(controller.state.interval - 0
 faster.Activated:Connect(function() changeInterval(controller.state.interval + 0.25) end)
 minimize.Activated:Connect(function()
     collapsed = not collapsed
-    skillTab.Visible, hoverTab.Visible, flightTab.Visible, autoETab.Visible, resultsTab.Visible, routeTab.Visible = not collapsed, not collapsed, not collapsed, not collapsed, not collapsed, not collapsed
+    for _, tab in ipairs({menuTab, skillTab, hoverTab, flightTab, autoETab, resultsTab, routeTab}) do
+        tab.Visible = not collapsed
+    end
     showWindowPage(activePage)
     panel.Size = UDim2.fromOffset(340, collapsed and 43 or 460)
     minimize.Text = collapsed and "+" or "−"
