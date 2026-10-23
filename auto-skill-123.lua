@@ -1,4 +1,4 @@
--- Auto Skill + NPC Hover + Flight v1.35 — flight reports game pull-backs and lowers its speed after each one.
+-- Auto Skill + NPC Hover + Flight v1.36 — Fullbright (F8, flight tab) brightens the map client-side.
 -- Number-row keys only; sends inputs at the configured interval, not cooldown bypasses.
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -66,7 +66,7 @@ local dragHeader = create("Frame", {
 }, panel)
 create("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "AUTO SKILL / HOVER / FLY v1.35", TextColor3 = color.text,
+    Text = "AUTO SKILL / HOVER / FLY v1.36", TextColor3 = color.text,
     TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, dragHeader)
@@ -176,9 +176,10 @@ local status = create("TextLabel", {
 
 local hotkeyHint = create("TextLabel", {
     Position = UDim2.fromOffset(14, 438), Size = UDim2.new(1, -28, 0, 16),
-    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 10,
-    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง • F7 เริ่ม",
+    BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 10, TextScaled = true,
+    Text = "F1 บิน • F2 ตาม • F3 Skill • F4 E • F5 รอบ • F6 ทาง • F7 เริ่ม • F8 สว่าง",
 }, panel)
+create("UITextSizeConstraint", {MaxTextSize = 10}, hotkeyHint)
 local focused, closed, collapsed = true, false, false
 local keyCodes = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three}
 local connections = {}
@@ -612,13 +613,18 @@ local flyFaster = create("TextButton", {
     Text = "+", TextSize = 21, TextColor3 = color.text,
 }, flightPage)
 local flyButton = create("TextButton", {
-    Position = UDim2.fromOffset(0, 214), Size = UDim2.new(1, 0, 0, 44),
+    Position = UDim2.fromOffset(0, 204), Size = UDim2.new(1, 0, 0, 40),
     BackgroundColor3 = color.blue, BorderSizePixel = 0,
     TextColor3 = color.text, Font = Enum.Font.GothamBold,
     TextSize = 17, Text = "FLIGHT: OFF — กดเพื่อบิน",
 }, flightPage)
+local brightButton = create("TextButton", {
+    Position = UDim2.fromOffset(0, 252), Size = UDim2.new(1, 0, 0, 30),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    TextColor3 = color.text, TextSize = 14, Text = "แมพสว่าง: OFF — F8",
+}, flightPage)
 local flyStatus = create("TextLabel", {
-    Position = UDim2.fromOffset(0, 271), Size = UDim2.new(1, 0, 0, 75),
+    Position = UDim2.fromOffset(0, 290), Size = UDim2.new(1, 0, 0, 56),
     BackgroundTransparency = 1, TextColor3 = color.muted, TextSize = 13, TextWrapped = true,
     Text = "เปิดบินจะหยุดยืนบนหัวมอนและ Auto Skill\nยุบหน้าต่างแล้วบินต่อได้ • ปิดบินเพื่อเดินปกติ",
 }, flightPage)
@@ -1804,6 +1810,68 @@ table.insert(connections, RunService.PreSimulation:Connect(function(dt)
         warn("NPC Hover glide:", err)
     end
 end))
+
+-- Fullbright: client-side daylight with no fog, shadows or dark tint. The game's own values are saved and put
+-- back when it is turned off; it is re-applied twice a second because areas change the lighting as you go.
+-- Scoped in a block: the main chunk is close to Lua's 200-local limit.
+local brightControl = {}
+do
+    local Lighting = game:GetService("Lighting")
+    local bright = {enabled = false, props = {}, effects = setmetatable({}, {__mode = "k"}), nextAt = 0}
+    local brightTargets = {
+        Brightness = 2, ClockTime = 14, FogStart = 0, FogEnd = 100000, GlobalShadows = false,
+        Ambient = Color3.fromRGB(180, 180, 180), OutdoorAmbient = Color3.fromRGB(180, 180, 180),
+        ExposureCompensation = 0,
+    }
+    local function brightEffect(object)
+        local saved = bright.effects[object]
+        if object:IsA("Atmosphere") then
+            if not saved then bright.effects[object] = {Density = object.Density, Haze = object.Haze} end
+            if object.Density ~= 0 then object.Density = 0 end
+            if object.Haze ~= 0 then object.Haze = 0 end
+        elseif object:IsA("ColorCorrectionEffect") or object:IsA("BlurEffect") or object:IsA("DepthOfFieldEffect") then
+            if not saved then bright.effects[object] = {Enabled = object.Enabled} end
+            if object.Enabled then object.Enabled = false end
+        end
+    end
+    local function applyBright()
+        for name, value in pairs(brightTargets) do
+            if bright.props[name] == nil then bright.props[name] = Lighting[name] end
+            if Lighting[name] ~= value then Lighting[name] = value end
+        end
+        for _, object in ipairs(Lighting:GetChildren()) do brightEffect(object) end
+        local camera = workspace.CurrentCamera
+        if camera then
+            for _, object in ipairs(camera:GetChildren()) do brightEffect(object) end
+        end
+    end
+    local function restoreBright()
+        for name, value in pairs(bright.props) do pcall(function() Lighting[name] = value end) end
+        for object, values in pairs(bright.effects) do
+            if object.Parent then
+                for name, value in pairs(values) do pcall(function() object[name] = value end) end
+            end
+        end
+        table.clear(bright.props)
+        table.clear(bright.effects)
+    end
+    local function toggleBright()
+        bright.enabled = not bright.enabled
+        if bright.enabled then pcall(applyBright) else restoreBright() end
+        brightButton.Text = bright.enabled and "แมพสว่าง: ON — F8" or "แมพสว่าง: OFF — F8"
+        brightButton.BackgroundColor3 = bright.enabled and color.green or color.button
+    end
+    brightButton.Activated:Connect(toggleBright)
+    table.insert(connections, RunService.Heartbeat:Connect(function()
+        if closed or not bright.enabled or os.clock() < bright.nextAt then return end
+        bright.nextAt = os.clock() + 0.5
+        pcall(applyBright)
+    end))
+    brightControl.toggle = toggleBright
+    function brightControl.stop()
+        if bright.enabled then bright.enabled = false restoreBright() end
+    end
+end
 
 local function setHoverConfig(mode)
     if type(mode) ~= "string" then mode = hoverController.state.mode end
@@ -3463,6 +3531,7 @@ hotkeys = buildHotkeyController({
         [Enum.KeyCode.F5] = resultsController.toggle,
         [Enum.KeyCode.F6] = progressController.toggle,
         [Enum.KeyCode.F7] = startController.toggle,
+        [Enum.KeyCode.F8] = brightControl.toggle,
     },
     blocked = function()
         return closed or not gameFocused() or GuiService.MenuIsOpen
@@ -3585,6 +3654,7 @@ session.stops = {
     autoEController.stop,
     resultsController.stop,
     startController.stop,
+    brightControl.stop,
     function() progressController.stop(false) end,
     function() stopFlight("ปิดหน้าต่างแล้ว") end,
     function() if hoverController then hoverController.stop() end end,
