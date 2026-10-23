@@ -1,4 +1,4 @@
--- Autokey v2.69 (Raid: choose Bacon of Grudge / Dragon / Lava Titan; wait for the portal and re-step until entered)
+-- Autokey v2.70 (Raid: step into the portal right after Open; it lasts only ~3 s)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -251,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.69",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.70",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.69" or "Anti-AFK: OFF  •  v2.69")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.70" or "Anti-AFK: OFF  •  v2.70")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -2727,29 +2727,35 @@ local function raidRound(alive, pause, fight)
             raidSay("กดปุ่ม Open (" .. raidBossName.Text .. ")...")
             -- ปุ่มของบอสตัวล่าง (Dragon) อยู่นอกกรอบจนกว่าจะเลื่อนลง: เลื่อนให้เห็นก่อน เผื่อต้องคลิกจริง
             pcall(raid.scrollIntoView, button)
-            if not pause(0.25) then return "cancel" end
+            if not pause(0.1) then return "cancel" end
             raid.ringBefore = raid.ringParts()
             if not pressGuiButton(button) then
                 return "fail", "กดปุ่ม Open ไม่สำเร็จ ตัวรันอาจไม่รองรับ"
             end
+            raid.openedAt = os.clock()
 
-            -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ (รอให้เกมรับการกด Open ก่อน ปิดเร็วไปบางทีเกมยังไม่ทันเปิดวง)
-            if not pause(0.8) then return "cancel" end
-            for _ = 1, 3 do
-                if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
-                closeRaidWindow(windowLabel, pressGuiButton)
-                if not pause(0.3) then return "cancel" end
-            end
+            -- (v2.70) ประตูอยู่แค่ ~3 วิหลังกด Open: วาร์ปเข้าวงทันที ไม่รอปิดหน้าต่างก่อน
+            -- (เดิมรอปิดหน้าต่าง + เช็คป้าย Already Spawned รวมเกือบ 3 วิ ประตูหายไปก่อนจะได้วาร์ป)
+            local characterNow, rootNow = duckCharacter()
+            if characterNow then raidMoveTo(characterNow, rootNow, raid.ringPose) end
 
-            -- เกมแจ้ง "... Is Already Spawned!" = บอสรอบก่อนยังไม่หาย/ยังเสกไม่ได้: รอแล้วลองกด E ใหม่ ไม่ใช่วาร์ปเข้าวง
+            -- เกมแจ้ง "... Is Already Spawned!" = บอสรอบก่อนยังไม่หาย: ประตูไม่เปิด รอแล้วลองกด E ใหม่
+            -- (เช็คระหว่างยืนอยู่ในวงแล้ว ไม่เสียเวลาประตู)
             if not spawnedNotice then
-                local noticeUntil = os.clock() + 1.6
+                local noticeUntil = os.clock() + 0.6
                 while alive() and os.clock() < noticeUntil do
                     if findSpawnedNotice() then
                         spawnedNotice = true
                         break
                     end
-                    task.wait(0.15)
+                    task.wait(0.1)
+                end
+            end
+            if spawnedNotice then
+                for _ = 1, 3 do
+                    if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
+                    closeRaidWindow(windowLabel, pressGuiButton)
+                    if not pause(0.3) then return "cancel" end
                 end
             end
         end
@@ -2770,39 +2776,30 @@ local function raidRound(alive, pause, fight)
 
     end
 
-    -- 4) รอวงเปิด แล้ววาร์ปเข้าวง
-    -- (v2.69) เดิมรอแค่ 1 วิแล้ววาร์ปครั้งเดียว: ถ้าวงขึ้นช้า ตัวละครไปยืนรอก่อนวงเกิด เกมไม่นับว่าเหยียบวง
-    -- Portal Gun ถูกใช้ไปแต่ไม่ได้เข้าด่าน ตอนนี้รอวงเกิดจริง (มีชิ้นส่วนใหม่โผล่ที่จุดวง) แล้ววาร์ป
-    -- และถ้ายังไม่ถูกเกมย้ายเข้าด่าน จะก้าวออกแล้วเหยียบวงใหม่ซ้ำจนเข้าได้
-    raidSay("รอวงวาร์ปเปิด...")
-    local ringNew = {}
-    local ringWait = os.clock() + 6
-    while alive() and os.clock() < ringWait do
-        ringNew = raid.newRingParts(raid.ringBefore)
-        if #ringNew > 0 then break end
-        task.wait(0.2)
-    end
-    if not alive() then return "cancel" end
-    if #ringNew == 0 then
-        -- ไม่เห็นวงใหม่ (วงอาจมีอยู่แล้วตลอด หรืออยู่นอกระยะโหลด): ทำแบบเดิม รอเพิ่มอีกนิดแล้ววาร์ป
-        if not pause(0.5) then return "cancel" end
-    end
+    -- 4) เข้าวง: ตัวละครถูกวาร์ปเข้าวงไปแล้วตั้งแต่กด Open (ประตูอยู่แค่ ~3 วิ)
+    -- ถ้ายังไม่ถูกเกมพาเข้าด่าน ก้าวออกแล้วเหยียบวงใหม่ถี่ๆ จนกว่าประตูจะหาย (ประมาณ 4 วิหลังกด Open)
     local entered = false
-    local entryDeadline = os.clock() + 15
     local entryTry = 0
+    local entryDeadline = (raid.openedAt or os.clock()) + 4
+    local function inRaid()
+        local _, rootNow = duckCharacter()
+        -- ถูกเกมย้ายไปไกลจากวง = เข้าด่านแล้ว หรือบอสโผล่ใกล้ตัว = อยู่ในด่านแล้ว
+        return rootNow ~= nil and ((rootNow.Position - raid.ringPose.Position).Magnitude > 40
+            or findRaidBoss(rootNow, false) ~= nil)
+    end
     while alive() and os.clock() < entryDeadline do
+        if inRaid() then entered = true break end
         entryTry += 1
         character, root = duckCharacter()
-        if character then
-            if entryTry > 1 then
-                -- ก้าวออกนอกวงก่อน แล้วค่อยกลับเข้า ให้เกมเห็นเป็นการเหยียบวงครั้งใหม่
-                raidMoveTo(character, root, raid.ringPose * CFrame.new(0, 0, 10))
-                if not pause(0.4) then return "cancel" end
-                character, root = duckCharacter()
-            end
+        if character and entryTry > 1 then
+            -- ก้าวออกนอกวงแวบเดียว แล้วกลับเข้า ให้เกมเห็นเป็นการเหยียบวงครั้งใหม่
+            raidMoveTo(character, root, raid.ringPose * CFrame.new(0, 0, 8))
+            task.wait(0.1)
+            character, root = duckCharacter()
         end
         if character then
             raidMoveTo(character, root, raid.ringPose)
+            local ringNew = raid.newRingParts(raid.ringBefore)
             if typeof(firetouchinterest) == "function" then
                 for index = 1, math.min(#ringNew, 6) do
                     pcall(firetouchinterest, root, ringNew[index], 0)
@@ -2810,21 +2807,22 @@ local function raidRound(alive, pause, fight)
                 end
             end
         end
-        raidSay(entryTry == 1 and "วาร์ปเข้าวงแล้ว รอเกมพาเข้าด่าน..."
+        raidSay(entryTry == 1 and "อยู่ในวงแล้ว รอเกมพาเข้าด่าน..."
             or ("ยังไม่ได้เข้าด่าน • เหยียบวงใหม่ (ครั้งที่ " .. entryTry .. ")"))
-        local checkUntil = os.clock() + 1.6
+        local checkUntil = math.min(os.clock() + 0.5, entryDeadline)
         while alive() and os.clock() < checkUntil do
-            local _, rootNow = duckCharacter()
-            -- ถูกเกมย้ายไปไกลจากวง = เข้าด่านแล้ว หรือบอสโผล่ใกล้ตัว = อยู่ในด่านแล้ว
-            if rootNow and ((rootNow.Position - raid.ringPose.Position).Magnitude > 40 or findRaidBoss(rootNow, false)) then
-                entered = true
-                break
-            end
-            task.wait(0.2)
+            if inRaid() then entered = true break end
+            task.wait(0.1)
         end
-        if entered or not alive() then break end
+        if entered then break end
     end
     if not alive() then return "cancel" end
+    -- ปิดหน้าต่าง Raid Boss ที่ค้างบังจอ หลังจากจัดการเรื่องประตูเสร็จแล้ว
+    for _ = 1, 3 do
+        if not windowLabel or not windowLabel.Parent or not guiVisible(windowLabel) then break end
+        closeRaidWindow(windowLabel, pressGuiButton)
+        if not pause(0.3) then return "cancel" end
+    end
     if not entered then
         warn("Raid: ไม่เห็นการย้ายเข้าด่านหลังเหยียบวง " .. entryTry .. " ครั้ง (จะรอบอสต่อเผื่อด่านอยู่ที่เดียวกับวง)")
     end
