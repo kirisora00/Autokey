@@ -1,4 +1,4 @@
--- Autokey v2.70 (Raid: step into the portal right after Open; it lasts only ~3 s)
+-- Autokey v2.71 (Dungeon: Auto Skip waits for the game before trying another click, so it no longer toggles itself off)
 -- Client script. AUTO starts disabled. Closing the UI stops tracking and AUTO.
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -251,12 +251,12 @@ local antiAfkButton = create("TextButton", {
     Position = UDim2.fromOffset(10, 358), Size = UDim2.fromOffset(145, 32),
     BackgroundColor3 = colors.green, BorderSizePixel = 0,
     TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold,
-    TextSize = 12, Text = "Anti-AFK: ON  •  v2.70",
+    TextSize = 12, Text = "Anti-AFK: ON  •  v2.71",
 }, sidebar)
 create("UICorner", {CornerRadius = UDim.new(0, 6)}, antiAfkButton)
 antiAfkButton.Activated:Connect(function()
     antiAfk.enabled = not antiAfk.enabled
-    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.70" or "Anti-AFK: OFF  •  v2.70")
+    antiAfkButton.Text = (antiAfk.enabled and "Anti-AFK: ON  •  v2.71" or "Anti-AFK: OFF  •  v2.71")
     antiAfkButton.BackgroundColor3 = antiAfk.enabled and colors.green or colors.active
 end)
 
@@ -3408,11 +3408,30 @@ local function toggleAutoSkip(label, pause)
 
     -- สถานะที่ใช้ตรวจว่ากดติดแล้ว: ข้อความป้าย + สีของสี่เหลี่ยม (ป้ายอาจอัปเดตช้า) จะกดวิธีถัดไปก็ต่อเมื่อไม่มีอะไรเปลี่ยนเลย
     -- (กันกดซ้ำแล้วสลับกลับเป็นปิด)
+    -- (v2.71) ดูสีของลูกในปุ่มด้วย: ช่องติ๊กสีแดง/เขียวมักเป็นรูปข้างในปุ่ม ไม่ใช่ตัวปุ่มเอง เดิมเห็นว่า "ไม่เปลี่ยน"
+    -- ทั้งที่ติดแล้ว เลยกดวิธีถัดไปซ้ำ = สลับกลับเป็นปิด (บางรอบติด บางรอบไม่ติด)
     local function snapshot(obj)
-        local color = obj:IsA("GuiObject") and obj.BackgroundColor3 or Color3.new()
-        local image = obj:IsA("ImageLabel") and obj.ImageColor3 or Color3.new()
-        return string.format("%s|%.2f,%.2f,%.2f|%.2f,%.2f,%.2f", label.Text, color.R, color.G, color.B, image.R, image.G, image.B)
+        local parts = {label.Text}
+        local function add(o)
+            if o:IsA("GuiObject") then
+                local c = o.BackgroundColor3
+                parts[#parts + 1] = string.format("%.2f,%.2f,%.2f,%s", c.R, c.G, c.B, tostring(o.Visible))
+            end
+            if o:IsA("ImageLabel") or o:IsA("ImageButton") then
+                local c = o.ImageColor3
+                parts[#parts + 1] = string.format("%.2f,%.2f,%.2f,%s", c.R, c.G, c.B, o.Image)
+            end
+        end
+        add(obj)
+        local count = 0
+        for _, child in ipairs(obj:GetDescendants()) do
+            count += 1
+            if count > 12 then break end
+            add(child)
+        end
+        return table.concat(parts, "|")
     end
+    local startCount = autoSkipState(label)
     local function fakeInput(obj, state)
         return {
             UserInputType = Enum.UserInputType.MouseButton1, UserInputState = state,
@@ -3448,11 +3467,13 @@ local function toggleAutoSkip(label, pause)
         for m, method in ipairs(methods) do
             local before = snapshot(obj)
             pcall(method, obj)
-            -- รอให้เซิร์ฟเวอร์ตอบ/ป้ายอัปเดต (สูงสุด ~1.6 วินาที) ก่อนตัดสินว่าไม่ติด
+            -- รอให้เซิร์ฟเวอร์ตอบ/ป้ายอัปเดต (สูงสุด ~3 วินาที) ก่อนตัดสินว่าไม่ติด
+            -- (เดิมรอแค่ 1.6 วิ ป้ายอัปเดตช้ากว่านั้นบางรอบ เลยกดวิธีถัดไปทับ = ปิดสิ่งที่เพิ่งเปิด)
             local changed = false
-            for _ = 1, 8 do
+            for _ = 1, 15 do
                 if not pause(0.2) then return false end
-                if isOn() then changed = true break end
+                local c = autoSkipState(label)
+                if isOn() or (c and startCount and c > startCount) then changed = true break end
                 if snapshot(obj) ~= before then changed = true break end
             end
             if changed then
@@ -3807,7 +3828,9 @@ local function dungeonRound(alive, pause, fight)
             if hud then
                 lastHud = now
                 local c, m = autoSkipState(hud)
-                if c and m and c < m and now - lastClick > 8 and reclicks < 5 then
+                -- กดซ้ำเฉพาะตอนยังไม่มีใครโหวตเลย [0/n]: ถ้าเล่นกับคนอื่นแล้วเป็น [1/2] แปลว่าเรากดแล้ว
+                -- กดอีกจะเป็นการยกเลิกโหวตของเราเอง
+                if c and m and c == 0 and now - lastClick > 8 and reclicks < 5 then
                     reclicks += 1
                     lastClick = now
                     toggleAutoSkip(hud, pause)
