@@ -1,5 +1,5 @@
--- Monter v1.00 — Fullbright: client-side daylight with no fog, shadows or dark tint (F8 or the button).
--- The game's own lighting is saved and put back when it is turned off or the window is closed.
+-- Monter v1.01 — Fullbright (F8) and monster ESP (F7): names, HP and distance through walls, plus a list of
+-- nearby monster names to copy. Everything is client-side and undone when the window is closed.
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -18,8 +18,10 @@ end
 if type(sessionEnv.MonterSession) == "table" and type(sessionEnv.MonterSession.cleanup) == "function" then
     pcall(sessionEnv.MonterSession.cleanup)
 end
-local old = playerGui:FindFirstChild("MonterWindow")
-if old then old:Destroy() end
+for _, name in ipairs({"MonterWindow", "MonterESPLabels"}) do
+    local old = playerGui:FindFirstChild(name)
+    if old then old:Destroy() end
+end
 
 local function create(className, props, parent)
     local object = Instance.new(className)
@@ -37,14 +39,14 @@ local color = {
 }
 local gui = create("ScreenGui", {Name = "MonterWindow", ResetOnSpawn = false, DisplayOrder = 30}, playerGui)
 local panel = create("Frame", {
-    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 110), Size = UDim2.fromOffset(240, 120),
+    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 110), Size = UDim2.fromOffset(240, 316),
     BackgroundColor3 = color.background, BorderSizePixel = 0, Active = true,
 }, gui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, panel)
 create("UIStroke", {Color = Color3.fromRGB(68, 73, 88), Thickness = 1}, panel)
 local header = create("TextLabel", {
     Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -56, 0, 40), BackgroundTransparency = 1,
-    Text = "MONTER v1.00", TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
+    Text = "MONTER v1.01", TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left, Active = true,
 }, panel)
 local close = create("TextButton", {
@@ -57,9 +59,24 @@ local brightButton = create("TextButton", {
     BackgroundColor3 = color.button, BorderSizePixel = 0, Font = Enum.Font.GothamBold,
     Text = "แมพสว่าง: OFF — F8", TextColor3 = color.text, TextSize = 15,
 }, panel)
+local espButton = create("TextButton", {
+    Position = UDim2.fromOffset(12, 88), Size = UDim2.new(1, -24, 0, 38),
+    BackgroundColor3 = color.button, BorderSizePixel = 0, Font = Enum.Font.GothamBold,
+    Text = "ESP มอน: OFF — F7", TextColor3 = color.text, TextSize = 15,
+}, panel)
+local espList = create("TextLabel", {
+    Position = UDim2.fromOffset(12, 132), Size = UDim2.new(1, -24, 0, 112), BackgroundTransparency = 1,
+    Text = "เปิด ESP แล้วรายชื่อมอนใกล้ตัวจะขึ้นตรงนี้", TextColor3 = color.muted, TextSize = 12,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true,
+}, panel)
+local copyButton = create("TextButton", {
+    Position = UDim2.fromOffset(12, 250), Size = UDim2.new(1, -24, 0, 28),
+    BackgroundColor3 = color.button, BorderSizePixel = 0,
+    Text = "คัดลอกรายชื่อมอนทั้งหมด", TextColor3 = color.text, TextSize = 13,
+}, panel)
 create("TextLabel", {
-    Position = UDim2.fromOffset(12, 88), Size = UDim2.new(1, -24, 0, 24), BackgroundTransparency = 1,
-    Text = "เห็นบนจอเราคนเดียว • ปิดแล้วแสงกลับเหมือนเดิม", TextColor3 = color.muted, TextSize = 11,
+    Position = UDim2.fromOffset(12, 284), Size = UDim2.new(1, -24, 0, 24), BackgroundTransparency = 1,
+    Text = "เห็นบนจอเราคนเดียว • ปิดหน้าต่างแล้วทุกอย่างกลับเหมือนเดิม", TextColor3 = color.muted, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
 }, panel)
 
@@ -117,9 +134,167 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
     bright.nextAt = os.clock() + 0.5
     pcall(applyBright)
 end))
+-- Monster ESP: any model with a Humanoid that is not a player's character counts as a monster, so no names
+-- are needed up front. The nearest 60 in range get a label (name, HP, distance) and the nearest 25 a
+-- through-wall highlight (Roblox draws at most 31 highlights at once).
+local ESP_RANGE, ESP_LABELS, ESP_HIGHLIGHTS = 1500, 60, 25
+local esp = {enabled = false, models = {}, items = {}, nextAt = 0, signals = {}, folder = nil, glow = nil, inRange = {}}
+local function monsterModel(model)
+    return model ~= nil and model:IsA("Model") and model ~= player.Character
+        and Players:GetPlayerFromCharacter(model) == nil
+end
+local function track(object)
+    if object:IsA("Humanoid") and monsterModel(object.Parent) then esp.models[object.Parent] = object end
+end
+local function dropItem(model)
+    local item = esp.items[model]
+    if not item then return end
+    esp.items[model] = nil
+    pcall(function() item.billboard:Destroy() end)
+    if item.highlight then pcall(function() item.highlight:Destroy() end) end
+end
+local function displayName(model, humanoid)
+    local shown = humanoid.DisplayName
+    return (shown ~= nil and shown ~= "" and shown ~= model.Name) and (shown .. " (" .. model.Name .. ")") or model.Name
+end
+local function glowFolder()
+    -- Highlights live under the camera (local-only); a new camera means a new folder.
+    local camera = workspace.CurrentCamera
+    if esp.glow and esp.glow.Parent == camera then return esp.glow end
+    for _, item in pairs(esp.items) do item.highlight = nil end
+    if esp.glow then pcall(function() esp.glow:Destroy() end) end
+    esp.glow = camera and create("Folder", {Name = "MonterESPHighlights"}, camera) or nil
+    return esp.glow
+end
+local function updateEsp()
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local list = {}
+    for model, humanoid in pairs(esp.models) do
+        if not model.Parent or not humanoid.Parent or not model:IsDescendantOf(workspace) then
+            esp.models[model] = nil
+            dropItem(model)
+        elseif humanoid.Health > 0 then
+            local part = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+                or model:FindFirstChildWhichIsA("BasePart", true)
+            if part then
+                local distance = root and (part.Position - root.Position).Magnitude or 0
+                if distance <= ESP_RANGE then
+                    list[#list + 1] = {model = model, humanoid = humanoid, part = part, distance = distance}
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.distance < b.distance end)
+    esp.inRange = list
+    local shown, folder = {}, glowFolder()
+    for index, entry in ipairs(list) do
+        if index > ESP_LABELS then break end
+        local model = entry.model
+        shown[model] = true
+        local item = esp.items[model]
+        if not item then
+            local billboard = create("BillboardGui", {
+                Name = "MonterESP", AlwaysOnTop = true, LightInfluence = 0, MaxDistance = math.huge,
+                Size = UDim2.fromOffset(200, 34), StudsOffset = Vector3.new(0, 3, 0),
+            }, esp.folder)
+            local label = create("TextLabel", {
+                Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
+                TextColor3 = Color3.fromRGB(255, 95, 95), TextStrokeTransparency = 0.3, TextSize = 13, Text = "",
+            }, billboard)
+            item = {billboard = billboard, label = label}
+            esp.items[model] = item
+        end
+        item.billboard.Adornee = model:FindFirstChild("Head") or entry.part
+        local humanoid = entry.humanoid
+        item.label.Text = string.format("%s\nHP %s/%s • %dm", displayName(model, humanoid),
+            math.floor(humanoid.Health + 0.5), math.floor(humanoid.MaxHealth + 0.5), math.floor(entry.distance))
+        if index <= ESP_HIGHLIGHTS and folder then
+            if not item.highlight or not item.highlight.Parent then
+                item.highlight = create("Highlight", {
+                    Adornee = model, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+                    FillColor = Color3.fromRGB(255, 60, 60), FillTransparency = 0.8,
+                    OutlineColor = Color3.fromRGB(255, 80, 80), OutlineTransparency = 0,
+                }, folder)
+            end
+        elseif item.highlight then
+            pcall(function() item.highlight:Destroy() end)
+            item.highlight = nil
+        end
+    end
+    for model in pairs(esp.items) do
+        if not shown[model] then dropItem(model) end
+    end
+    -- Name summary: how many of each monster are in range, nearest kinds first.
+    local counts, order = {}, {}
+    for _, entry in ipairs(list) do
+        local name = displayName(entry.model, entry.humanoid)
+        if not counts[name] then counts[name] = {count = 0, nearest = entry.distance} order[#order + 1] = name end
+        counts[name].count += 1
+    end
+    local lines = {string.format("มอนในระยะ %d studs: %d ตัว", ESP_RANGE, #list)}
+    for index, name in ipairs(order) do
+        if index > 7 then lines[#lines + 1] = "... และอีก " .. (#order - 7) .. " ชื่อ (กดคัดลอกดูทั้งหมด)" break end
+        lines[#lines + 1] = string.format("• %s x%d (ใกล้สุด %dm)", name, counts[name].count, math.floor(counts[name].nearest))
+    end
+    espList.Text = table.concat(lines, "\n")
+end
+local function stopEsp()
+    for _, connection in ipairs(esp.signals) do pcall(function() connection:Disconnect() end) end
+    table.clear(esp.signals)
+    for model in pairs(esp.items) do dropItem(model) end
+    table.clear(esp.models)
+    table.clear(esp.inRange)
+    if esp.folder then pcall(function() esp.folder:Destroy() end) esp.folder = nil end
+    if esp.glow then pcall(function() esp.glow:Destroy() end) esp.glow = nil end
+end
+local function toggleEsp()
+    esp.enabled = not esp.enabled
+    if esp.enabled then
+        esp.folder = create("Folder", {Name = "MonterESPLabels"}, playerGui)
+        for _, object in ipairs(workspace:GetDescendants()) do track(object) end
+        table.insert(esp.signals, workspace.DescendantAdded:Connect(function(object)
+            if object:IsA("Humanoid") then task.defer(track, object) end -- its model may still be assembling
+        end))
+        table.insert(esp.signals, workspace.DescendantRemoving:Connect(function(object)
+            if esp.models[object] then esp.models[object] = nil dropItem(object) end
+        end))
+        esp.nextAt = 0
+    else
+        stopEsp()
+        espList.Text = "เปิด ESP แล้วรายชื่อมอนใกล้ตัวจะขึ้นตรงนี้"
+    end
+    espButton.Text = esp.enabled and "ESP มอน: ON — F7" or "ESP มอน: OFF — F7"
+    espButton.BackgroundColor3 = esp.enabled and color.green or color.button
+end
+espButton.Activated:Connect(toggleEsp)
+table.insert(connections, RunService.Heartbeat:Connect(function()
+    if closed or not esp.enabled or os.clock() < esp.nextAt then return end
+    esp.nextAt = os.clock() + 0.25
+    local ok, err = pcall(updateEsp)
+    if not ok then warn("Monter ESP:", err) end
+end))
+copyButton.Activated:Connect(function()
+    local counts, order = {}, {}
+    for _, entry in ipairs(esp.inRange) do
+        local name = displayName(entry.model, entry.humanoid)
+        if not counts[name] then counts[name] = 0 order[#order + 1] = name end
+        counts[name] += 1
+    end
+    if #order == 0 then copyButton.Text = "ยังไม่มีรายชื่อ • เปิด ESP ก่อน" return end
+    local lines = {}
+    for _, name in ipairs(order) do lines[#lines + 1] = name .. " x" .. counts[name] end
+    local report = table.concat(lines, "\n")
+    print("Monter monsters:\n" .. report)
+    local copy = setclipboard or toclipboard
+    local copied = type(copy) == "function" and pcall(copy, report)
+    copyButton.Text = copied and ("คัดลอกแล้ว " .. #order .. " ชื่อ") or "ดูรายชื่อใน Console (F9)"
+end)
+
 table.insert(connections, UserInputService.InputBegan:Connect(function(input, processed)
     if processed or closed or UserInputService:GetFocusedTextBox() then return end
     if input.KeyCode == Enum.KeyCode.F8 then toggleBright() end
+    if input.KeyCode == Enum.KeyCode.F7 then toggleEsp() end
 end))
 
 -- Drag the window by its title.
@@ -153,6 +328,8 @@ function session.cleanup()
         bright.enabled = false
         restoreBright()
     end
+    esp.enabled = false
+    stopEsp()
     if sessionEnv.MonterSession == session then sessionEnv.MonterSession = nil end
     pcall(function() gui:Destroy() end)
 end
