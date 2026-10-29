@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>Backdrop</title>
+<style>
+@font-face{font-family:Kanit;font-weight:400;src:url(fonts/Kanit-Regular.ttf)}
+@font-face{font-family:Kanit;font-weight:500;src:url(fonts/Kanit-Medium.ttf)}
+@font-face{font-family:Kanit;font-weight:600;src:url(fonts/Kanit-SemiBold.ttf)}
+@font-face{font-family:Kanit;font-weight:700;src:url(fonts/Kanit-Bold.ttf)}
+@font-face{font-family:Kanit;font-weight:800;src:url(fonts/Kanit-ExtraBold.ttf)}
+@font-face{font-family:Kanit;font-weight:700;font-style:italic;src:url(fonts/Kanit-BoldItalic.ttf)}
+@font-face{font-family:Charm;font-weight:700;src:url(fonts/Charmonman-Bold.ttf)}
+:root{--navy:#0a1c48;--navy2:#13306f;--red:#c8102e;--gold1:#fff2b0;--gold2:#f4c443;--gold3:#b9861d}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:3000px;height:2000px;overflow:hidden;background:var(--navy)}
+#bd{position:relative;width:3000px;height:2000px;overflow:hidden;font-family:Kanit,sans-serif;
+  background:
+    radial-gradient(ellipse 1500px 900px at 50% 28%, rgba(80,140,255,.45), transparent 70%),
+    radial-gradient(ellipse 900px 600px at 50% 105%, rgba(244,196,67,.25), transparent 70%),
+    linear-gradient(180deg,#0d2560 0%,#0a1c48 55%,#071433 100%)}
+.rays{position:absolute;inset:0;
+  background:repeating-conic-gradient(from 0deg at 50% 30%, rgba(255,255,255,.05) 0 4deg, transparent 4deg 10deg);
+  -webkit-mask:radial-gradient(circle at 50% 30%, #000 0, #000 30%, transparent 75%);mask:radial-gradient(circle at 50% 30%, #000 0, #000 30%, transparent 75%)}
+.dots{position:absolute;inset:0;background-image:radial-gradient(rgba(255,230,150,.55) 1.6px, transparent 2px);background-size:46px 46px;
+  -webkit-mask:linear-gradient(180deg,#000,transparent 45%);mask:linear-gradient(180deg,#000,transparent 45%);opacity:.35}
+svg.wave{position:absolute;left:0;width:3000px}
+
+/* header */
+.head{position:absolute;top:50px;left:0;right:0;display:flex;justify-content:center;align-items:center;gap:70px}
+.emb{height:380px;filter:drop-shadow(0 10px 20px rgba(0,0,0,.6)) drop-shadow(0 0 30px rgba(255,215,90,.35))}
+.titles{text-align:center}
+.t1{font-weight:800;font-size:220px;line-height:1.12;letter-spacing:2px;
+  background:linear-gradient(180deg,var(--gold1) 8%,var(--gold2) 48%,var(--gold3) 72%,#ffe58a 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 6px 0 #5a3a05) drop-shadow(0 14px 22px rgba(0,0,0,.6))}
+.t2{font-weight:600;font-size:96px;line-height:1.22;color:#fff;text-shadow:0 5px 14px rgba(0,0,0,.6)}
+.t2 b{font-weight:600;color:#ffd75e}
+.divider{display:flex;align-items:center;justify-content:center;gap:24px;margin:6px auto 0}
+.divider i{display:block;width:520px;height:10px;background:linear-gradient(180deg,var(--red) 0 30%,#fff 30% 70%,#1f3fa0 70%);border-radius:5px}
+.divider i.l{background:linear-gradient(90deg,transparent,var(--gold2))}
+.divider i.r{background:linear-gradient(270deg,transparent,var(--gold2))}
+.heart{font-size:64px;line-height:1;color:var(--red);text-shadow:0 0 0 #fff,-3px 0 #fff,3px 0 #fff,0 3px #fff,0 -3px #fff}
+
+/* photos */
+.ph{position:absolute;background:#fff;padding:18px;border-radius:14px;
+  box-shadow:0 0 0 7px var(--gold2),0 0 0 10px #7a5410,0 30px 60px rgba(0,0,0,.65)}
+.ph img{display:block;width:100%;height:100%;object-fit:cover;border-radius:6px}
+.p-kitchen{left:60px;top:790px;width:900px;height:480px;transform:rotate(-4deg)}
+.p-relief{right:60px;top:790px;width:900px;height:480px;transform:rotate(4deg)}
+.p-relief img{object-position:0 0}
+.p-main{left:50%;top:665px;width:1170px;height:800px;transform:translateX(-50%);z-index:3;
+  box-shadow:0 0 0 9px var(--gold2),0 0 0 13px #7a5410,0 0 80px rgba(255,210,90,.45),0 40px 80px rgba(0,0,0,.7)}
+.p-main img{object-position:50% 40%}
+.tag{position:absolute;right:-6px;bottom:-6px;width:380px;height:90px;border-radius:0 0 10px 0;
+  background:linear-gradient(135deg,transparent 0 22%,var(--navy) 22%);}
+.food{position:absolute;right:50px;top:1150px;width:340px;height:340px;border-radius:50%;overflow:hidden;z-index:4;
+  box-shadow:0 0 0 12px #fff,0 0 0 18px var(--gold2),0 24px 50px rgba(0,0,0,.6)}
+.food img{width:100%;height:100%;object-fit:cover}
+
+/* quote */
+.quote{position:absolute;left:50%;top:1525px;transform:translateX(-50%);z-index:5;white-space:nowrap;
+  padding:26px 140px 18px;font-family:Charm,Kanit;font-weight:700;font-size:96px;line-height:1.25;color:#fff;
+  background:linear-gradient(90deg,transparent,rgba(10,28,72,.95) 14%,rgba(10,28,72,.95) 86%,transparent);
+  text-shadow:0 4px 12px rgba(0,0,0,.6)}
+.quote span{color:#ffd75e}
+.quote:before,.quote:after{content:"";position:absolute;left:8%;right:8%;height:5px;background:linear-gradient(90deg,transparent,var(--gold2),transparent)}
+.quote:before{top:0}.quote:after{bottom:0}
+
+/* footer */
+.foot{position:absolute;right:0;bottom:40px;z-index:6;font-weight:700;font-style:italic;font-size:88px;line-height:1.3;color:#fff;
+  padding:4px 110px 10px 150px;border-radius:120px 0 0 120px;background:linear-gradient(90deg,#13306f,#0a1c48);
+  box-shadow:0 0 0 6px var(--gold2),0 16px 40px rgba(0,0,0,.6);text-shadow:0 4px 14px rgba(0,0,0,.7)}
+.foot span{color:#ffd75e}
+</style>
+</head>
+<body>
+<div id="bd">
+  <div class="rays"></div>
+  <div class="dots"></div>
+
+  <!-- top flag sweep -->
+  <svg class="wave" style="top:0" height="420" viewBox="0 0 3000 420" preserveAspectRatio="none">
+    <path d="M0 0H700C520 60 300 150 0 300Z" fill="#c8102e"/>
+    <path d="M0 0H560C400 60 220 130 0 230Z" fill="#fff"/>
+    <path d="M0 0H430C300 50 160 105 0 165Z" fill="#1f3fa0"/>
+    <path d="M0 0H300C200 35 100 70 0 100Z" fill="#fff"/>
+    <path d="M0 0H190C120 22 60 42 0 60Z" fill="#c8102e"/>
+    <path d="M3000 0H2300C2480 60 2700 150 3000 300Z" fill="#c8102e"/>
+    <path d="M3000 0H2440C2600 60 2780 130 3000 230Z" fill="#fff"/>
+    <path d="M3000 0H2570C2700 50 2840 105 3000 165Z" fill="#1f3fa0"/>
+    <path d="M3000 0H2700C2800 35 2900 70 3000 100Z" fill="#fff"/>
+    <path d="M3000 0H2810C2880 22 2940 42 3000 60Z" fill="#c8102e"/>
+  </svg>
+
+  <!-- bottom flag wave -->
+  <svg class="wave" style="bottom:0" height="330" viewBox="0 0 3000 330" preserveAspectRatio="none">
+    <path d="M0 70C600 -10 1100 200 1700 140S2600 20 3000 90V330H0Z" fill="#c8102e"/>
+    <path d="M0 110C600 30 1100 240 1700 180S2600 60 3000 130V330H0Z" fill="#fff"/>
+    <path d="M0 150C600 70 1100 280 1700 220S2600 100 3000 170V330H0Z" fill="#1f3fa0"/>
+    <path d="M0 230C600 150 1100 340 1700 290S2600 190 3000 250V330H0Z" fill="#fff"/>
+    <path d="M0 260C600 185 1100 360 1700 315S2600 225 3000 280V330H0Z" fill="#c8102e"/>
+  </svg>
+
+  <div class="head">
+    <img class="emb" src="img/emblem_cut.png" alt="">
+    <div class="titles">
+      <div class="t1">งานเลี้ยงอาหารกลางวัน</div>
+      <div class="t2">ทหารกองประจำการที่<b>ปลดประจำการ</b></div>
+      <div class="t2">และทหารที่ช่วยเหลือการบรรเทาสาธารณภัย</div>
+      <div class="divider"><i class="l"></i><span class="heart">♥</span><i class="r"></i></div>
+    </div>
+    <img class="emb" src="img/emblem_cut.png" alt="">
+  </div>
+
+  <div class="ph p-kitchen"><img src="img/kitchen.jpg" alt=""></div>
+  <div class="ph p-relief"><img src="img/relief.jpg" alt=""></div>
+  <div class="ph p-main"><img src="img/discharged.jpg" alt=""></div>
+  <div class="food"><img src="img/food.jpg" alt=""></div>
+
+  <div class="quote">“ ขอบคุณ...ที่เสียสละ <span>เพื่อประชาชนและประเทศชาติ</span> ”</div>
+
+  <div class="foot">ทหารไทย<span>...</span>เพื่อประชาชน</div>
+</div>
+</body>
+</html>
