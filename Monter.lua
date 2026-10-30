@@ -1,5 +1,5 @@
--- Monter v1.02 — Fullbright (F8), monster ESP (F7) and player ESP (F6, ally green / enemy red): names, HP and
--- distance through walls, plus a list of nearby monster names to copy. Client-side; undone when closed.
+-- Monter v1.03 — Fullbright (F8), monster ESP (F7: names, HP, distance, copyable list) and player ESP
+-- (F6: highlight only, ally green / enemy red). Client-side; undone when closed.
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -46,7 +46,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 10)}, panel)
 create("UIStroke", {Color = Color3.fromRGB(68, 73, 88), Thickness = 1}, panel)
 local header = create("TextLabel", {
     Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -56, 0, 40), BackgroundTransparency = 1,
-    Text = "MONTER v1.02", TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
+    Text = "MONTER v1.03", TextColor3 = color.text, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left, Active = true,
 }, panel)
 local close = create("TextButton", {
@@ -302,13 +302,14 @@ copyButton.Activated:Connect(function()
     copyButton.Text = copied and ("คัดลอกแล้ว " .. #order .. " ชื่อ") or "ดูรายชื่อใน Console (F9)"
 end)
 
--- Player ESP: other players with a label (name, HP, distance, team) and, for the nearest 12, a highlight.
+-- Player ESP: a through-wall highlight per player, no name labels (they cluttered the screen).
 -- Green = same team, red = enemy, orange = the game uses no teams so there is nothing to tell apart.
-local PLAYER_RANGE, PLAYER_HIGHLIGHTS = 5000, 12
+-- Roblox draws at most 31 highlights: players get 12 while monster ESP is on (it keeps 18), else 30.
+local PLAYER_RANGE = 5000
 local relationColor = {
     ally = Color3.fromRGB(80, 220, 120), enemy = Color3.fromRGB(255, 80, 80), none = Color3.fromRGB(255, 170, 60),
 }
-local pesp = {enabled = false, showAllies = true, items = {}, nextAt = 0, folder = nil, glow = nil}
+local pesp = {enabled = false, showAllies = true, items = {}, nextAt = 0, glow = nil}
 local function relation(other)
     if player.Team and other.Team then return other.Team == player.Team and "ally" or "enemy" end
     -- Some games skip Roblox Teams and tag players with an attribute instead.
@@ -322,7 +323,6 @@ local function dropPlayerItem(other)
     local item = pesp.items[other]
     if not item then return end
     pesp.items[other] = nil
-    pcall(function() item.billboard:Destroy() end)
     if item.highlight then pcall(function() item.highlight:Destroy() end) end
 end
 local function playerGlowFolder()
@@ -353,43 +353,25 @@ local function updatePlayerEsp()
     end
     table.sort(list, function(a, b) return a.distance < b.distance end)
     local shown, folder = {}, playerGlowFolder()
+    local limit = esp.enabled and 12 or 30
     for index, entry in ipairs(list) do
+        if index > limit or not folder then break end
         local other = entry.player
         shown[other] = true
         local item = pesp.items[other]
         if not item then
-            local billboard = create("BillboardGui", {
-                Name = "MonterPlayerESP", AlwaysOnTop = true, LightInfluence = 0, MaxDistance = math.huge,
-                Size = UDim2.fromOffset(220, 34), StudsOffset = Vector3.new(0, 3.5, 0),
-            }, pesp.folder)
-            local label = create("TextLabel", {
-                Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
-                TextStrokeTransparency = 0.3, TextSize = 13, Text = "",
-            }, billboard)
-            item = {billboard = billboard, label = label}
+            item = {}
             pesp.items[other] = item
         end
-        local tint = relationColor[entry.kind]
-        local team = entry.kind == "ally" and "ทีมเรา" or (entry.kind == "enemy" and "ศัตรู" or "ไม่มีทีม")
-        if other.Team then team = team .. " • " .. other.Team.Name end
-        item.billboard.Adornee = entry.character:FindFirstChild("Head") or entry.part
-        item.label.TextColor3 = tint
-        item.label.Text = string.format("%s (@%s)\nHP %s/%s • %dm • %s", other.DisplayName, other.Name,
-            math.floor(entry.humanoid.Health + 0.5), math.floor(entry.humanoid.MaxHealth + 0.5),
-            math.floor(entry.distance), team)
-        if index <= PLAYER_HIGHLIGHTS and folder then
-            if not item.highlight or not item.highlight.Parent then
-                item.highlight = create("Highlight", {
-                    DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, FillTransparency = 0.8, OutlineTransparency = 0,
-                }, folder)
-            end
-            -- Characters are replaced on respawn and teams can change mid-game: refresh both every tick.
-            item.highlight.Adornee = entry.character
-            item.highlight.FillColor, item.highlight.OutlineColor = tint, tint
-        elseif item.highlight then
-            pcall(function() item.highlight:Destroy() end)
-            item.highlight = nil
+        if not item.highlight or not item.highlight.Parent then
+            item.highlight = create("Highlight", {
+                DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, FillTransparency = 0.6, OutlineTransparency = 0,
+            }, folder)
         end
+        -- Characters are replaced on respawn and teams can change mid-game: refresh both every tick.
+        local tint = relationColor[entry.kind]
+        item.highlight.Adornee = entry.character
+        item.highlight.FillColor, item.highlight.OutlineColor = tint, tint
     end
     for other in pairs(pesp.items) do
         if not shown[other] then dropPlayerItem(other) end
@@ -400,13 +382,11 @@ local function updatePlayerEsp()
 end
 local function stopPlayerEsp()
     for other in pairs(pesp.items) do dropPlayerItem(other) end
-    if pesp.folder then pcall(function() pesp.folder:Destroy() end) pesp.folder = nil end
     if pesp.glow then pcall(function() pesp.glow:Destroy() end) pesp.glow = nil end
 end
 local function togglePlayerEsp()
     pesp.enabled = not pesp.enabled
     if pesp.enabled then
-        pesp.folder = create("Folder", {Name = "MonterPlayerLabels"}, playerGui)
         pesp.nextAt = 0
     else
         stopPlayerEsp()
